@@ -1,5 +1,12 @@
+pub mod additive_renderer;
+
+use std::sync::Arc;
+use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
+use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::device::Queue;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
+use crate::job::Job;
 
 pub fn find_rectangle_points(
     center1: Vector2<f32>,
@@ -27,4 +34,19 @@ pub fn find_rectangle_points(
     });
 
     Matrix2x4::from_columns(&points)
+}
+
+pub fn process_job(job: Job) {
+    let (device , queue) = additive_renderer::initialize_device();
+    let allocator = StandardMemoryAllocator::new_default(device.clone());
+
+    let data: i32 = 12;
+    let ex_buffer = CpuAccessibleBuffer::from_data(
+        &allocator,
+        BufferUsage {
+            uniform_buffer: true,
+            ..Default::default()
+        }, 
+        false, 
+        data);
 }
