@@ -1,9 +1,8 @@
 pub mod additive_renderer;
 
-use std::sync::Arc;
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
 use vulkano::memory::allocator::StandardMemoryAllocator;
-use vulkano::device::Queue;
+use bytemuck::{Pod, Zeroable};
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use crate::job::Job;
@@ -36,17 +35,41 @@ pub fn find_rectangle_points(
     Matrix2x4::from_columns(&points)
 }
 
+#[repr(C)]
+#[derive(Default, Copy, Clone, Zeroable, Pod)]
+struct CPUVertex {
+    position: [f32; 3],
+    color: [u32; 3]
+}
+
+vulkano::impl_vertex!(CPUVertex, position);
+
 pub fn process_job(job: Job) {
-    let (device , queue) = additive_renderer::initialize_device();
+    let (device , _queue) = additive_renderer::initialize_device();
     let allocator = StandardMemoryAllocator::new_default(device.clone());
 
-    let data: i32 = 12;
-    let ex_buffer = CpuAccessibleBuffer::from_data(
+    let target_model = job.target_mesh.clone();
+    let target_verts = target_model.vertices.iter();
+
+    let mut target_vert_buff: Vec<CPUVertex> = Vec::new();
+    for vertex in target_verts {
+        let (x, y, z) = (vertex.x, vertex.y, vertex.z);
+
+        let vert = CPUVertex {
+            position: [x, y, z],
+            color: [0, 0, 255],
+        };
+
+        target_vert_buff.push(vert);
+    }
+
+
+    let _ex_buffer = CpuAccessibleBuffer::from_iter(
         &allocator,
         BufferUsage {
-            uniform_buffer: true,
+            vertex_buffer: true,
             ..Default::default()
         }, 
         false, 
-        data);
+        target_vert_buff);
 }
