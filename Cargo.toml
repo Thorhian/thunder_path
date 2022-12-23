@@ -11,3 +11,4 @@ clap = { version = "4.0.29", features = ["derive"] }
 nalgebra = "0.31.4"
 russimp = "1.0.6"
 vulkano = "0.32.3"
+vulkano-shaders = "0.32.0"

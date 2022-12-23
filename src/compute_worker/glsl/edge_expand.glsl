@@ -1,0 +1,58 @@
+#version 450
+
+layout(location = 0) out vec4 outColor;
+
+layout(binding = 1) uniform sampler2D prev_render;
+layout(binding = 0) uniform mill_parameters {
+    float cutterRadius;
+} params;
+
+ivec4 getBoundingBox(float radius, ivec2 pixelCoords) {
+    int top = int(ceil(pixelCoords[1] + radius));
+    int bottom = int(floor(pixelCoords[1] - radius));
+    int left = int(floor(pixelCoords[0] - radius));
+    int right = int(ceil(pixelCoords[0] + radius));
+
+    return ivec4(top, bottom, left, right);
+}
+
+bool isInsideCircle(float radius, ivec2 centerCoords, ivec2 pixelCoords) {
+    float leftSide = pow(pixelCoords[0] - centerCoords[0], 2) +
+        pow(pixelCoords[1] - centerCoords[1], 2);
+
+    return (leftSide < pow(radius, 2));
+}
+
+bool searchForBorder(float radius, ivec4 boundingBox, ivec2 currentCoord) {
+    for(int x = boundingBox[2]; x < boundingBox[3]; x += 1) {
+        for(int y = boundingBox[0]; y > boundingBox[1]; y -= 1) {
+            vec4 current_pix = texelFetch(prev_render, ivec2(x, y), 0);
+
+            if(!(current_pix.b > 0.98)
+               && current_pix.r > 0.95
+               && current_pix.g > 0.45
+               && isInsideCircle(radius, ivec2(x, y), currentCoord)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void main() {
+    ivec2 coords = ivec2(gl_FragCoord.x, gl_FragCoord.y);
+    vec4 texColor = texelFetch(prev_render, coords, 0);
+
+    if(texColor.b < 0.1) {
+        ivec4 boundingBox = getBoundingBox(params.cutterRadius, coords);
+        if(searchForBorder(params.cutterRadius, boundingBox, coords)) {
+            outColor = vec4(0.0, 1.0, 0.0, 1.0);
+        }
+        else {
+            outColor = texColor;
+        }
+    }
+    else {
+        outColor = texColor;
+    }
+}
