@@ -5,7 +5,7 @@ layout(location = 1) in vec4 in_color;
 
 layout(location = 2) out vec4 v_color;
 
-layout(binding=0) uniform MatrixBlock {
+layout(binding = 0) uniform MatrixBlock {
     mat4 projection_matrix;
 } matrices;
 
