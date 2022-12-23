@@ -1,10 +1,17 @@
 pub mod additive_renderer;
+pub mod shaders;
 
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
 use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::pipeline::GraphicsPipeline;
+use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use bytemuck::{Pod, Zeroable};
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
+use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
+use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
+use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
+use vulkano::render_pass::Subpass;
 use crate::job::Job;
 
 
@@ -22,14 +29,68 @@ pub fn process_job(job: Job) {
     let allocator = StandardMemoryAllocator::new_default(device.clone());
 
     let target_model = job.target_mesh.clone();
-    let target_verts = target_model.vertices.iter();
-    let first_vert = target_model.vertices.first().unwrap();
+    let stock_model = job.target_mesh.clone();
+    let (target_vert_buff, target_bounds) = import_verts(target_model);
+    let (stock_vert_buff, stock_bounds) = import_verts(stock_model);
 
-    let mut target_vert_buff: Vec<CPUVertex> = Vec::new();
+    let ortho_matrix = nalgebra::Orthographic3::new(
+        target_bounds[0], target_bounds[1],
+        target_bounds[2], target_bounds[3],
+        target_bounds[4], target_bounds[5]);
+
+    ortho_matrix.as_matrix().iter();
+
+    let gpu_target_buffer = CpuAccessibleBuffer::from_iter(
+        &allocator,
+        BufferUsage {
+            vertex_buffer: true,
+            ..Default::default()
+        }, 
+        false, 
+        target_vert_buff
+    );
+
+    let gpu_stock_buffer = CpuAccessibleBuffer::from_iter(
+        &allocator,
+        BufferUsage {
+            vertex_buffer: true,
+            ..Default::default()
+        },
+        false,
+        stock_vert_buff
+    );
+
+    //Load Shaders
+    let target_vs = shaders::target_vs::load(device.clone())
+        .expect("Failed to Create Target Vertex Shader");
+
+    let additive_pipeline_builder = GraphicsPipeline::start()
+        .vertex_input_state(BuffersDefinition::new().vertex::<CPUVertex>())
+        .vertex_shader(target_vs.entry_point("main").unwrap(), ())
+        .input_assembly_state(InputAssemblyState::new())
+        .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([fillme]))
+        .fragment_shader(, )
+        .render_pass(Subpass::from(, ))
+        .build(device.clone())
+        .expect("Pipeline Building Has Failed");
+
+    
+
+}
+
+fn import_verts(mesh: & russimp::mesh::Mesh)
+                -> (Vec<CPUVertex>, Vec<f32>) {
+    let vertices = mesh.vertices.iter();
+    let first_vert = mesh.vertices
+        .first()
+        .expect("No Vertices Found in Mesh");
+
+    let mut vertice_buffer: Vec<CPUVertex> = Vec::new();
     let mut bounds: Vec<f32> = vec![first_vert.x, first_vert.x,
                                     first_vert.y, first_vert.y,
                                     first_vert.z, first_vert.z];
-    for vertex in target_verts {
+
+    for vertex in vertices {
         let (x, y, z) = (vertex.x, vertex.y, vertex.z);
 
         if x < bounds[0] {
@@ -52,29 +113,16 @@ pub fn process_job(job: Job) {
         }
 
 
-        let vert = CPUVertex {
+        let converted_vert = CPUVertex {
             position: [x, y, z],
             color: [0, 0, 255],
         };
 
-        target_vert_buff.push(vert);
+        vertice_buffer.push(converted_vert);
     }
-    println!("Bounds: {:?}", bounds);
 
-    let ortho_matrix = nalgebra::Orthographic3::new(bounds[0], bounds[1],
-        bounds[2], bounds[3],
-        bounds[4], bounds[5]);
+    return (vertice_buffer, bounds)
 
-    ortho_matrix.as_matrix().iter();
-
-    let _ex_buffer = CpuAccessibleBuffer::from_iter(
-        &allocator,
-        BufferUsage {
-            vertex_buffer: true,
-            ..Default::default()
-        }, 
-        false, 
-        target_vert_buff);
 }
 
 pub fn find_rectangle_points(
