@@ -2,36 +2,50 @@ pub mod additive_renderer;
 pub mod shaders;
 
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
+use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassContents, CopyImageToBufferInfo};
+use vulkano::image::StorageImage;
+use vulkano::image::view::ImageView;
 use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::pipeline::GraphicsPipeline;
-use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use bytemuck::{Pod, Zeroable};
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
-use vulkano::render_pass::Subpass;
-use crate::job::Job;
+use vulkano::render_pass::{Subpass, Framebuffer, FramebufferCreateInfo};
+use vulkano::sync::{self, GpuFuture};
 
+use image::{ImageBuffer, Rgba};
+
+use crate::job::Job;
 
 #[repr(C)]
 #[derive(Default, Copy, Clone, Zeroable, Pod)]
 struct CPUVertex {
-    position: [f32; 3],
-    color: [u32; 3]
+    in_vert: [f32; 3],
+    in_color: [f32; 4]
 }
 
-vulkano::impl_vertex!(CPUVertex, position);
+vulkano::impl_vertex!(CPUVertex, in_vert, in_color);
 
 pub fn process_job(job: Job) {
-    let (device , _queue) = additive_renderer::initialize_device();
+    let (device , queue) = additive_renderer::initialize_device();
     let allocator = StandardMemoryAllocator::new_default(device.clone());
+    let command_allocator = StandardCommandBufferAllocator::new(
+        device.clone(),
+        StandardCommandBufferAllocatorCreateInfo {
+            ..Default::default()
+        }
+    );
 
     let target_model = job.target_mesh.clone();
     let stock_model = job.target_mesh.clone();
     let (target_vert_buff, target_bounds) = import_verts(target_model);
-    let (stock_vert_buff, stock_bounds) = import_verts(stock_model);
+    let (stock_vert_buff, _stock_bounds) = import_verts(stock_model);
+    let target_vert_count: u32 = target_vert_buff.len().try_into().unwrap();
+    let _stock_vert_count: u32 = stock_vert_buff.len().try_into().unwrap();
 
     let ortho_matrix = nalgebra::Orthographic3::new(
         target_bounds[0], target_bounds[1],
@@ -48,9 +62,10 @@ pub fn process_job(job: Job) {
         }, 
         false, 
         target_vert_buff
-    );
+    )
+    .expect("Failed to create gpu_target_buffer");
 
-    let gpu_stock_buffer = CpuAccessibleBuffer::from_iter(
+    let _gpu_stock_buffer = CpuAccessibleBuffer::from_iter(
         &allocator,
         BufferUsage {
             vertex_buffer: true,
@@ -58,23 +73,145 @@ pub fn process_job(job: Job) {
         },
         false,
         stock_vert_buff
-    );
+    )
+    .expect("Failed to create gpu_stock_buffer");
+
+    //Allocate Image Target
+    let image = StorageImage::new(
+        &allocator,
+        vulkano::image::ImageDimensions::Dim2d { 
+            width: 1024,
+            height: 1024, 
+            array_layers: 1 
+        },
+        vulkano::format::Format::R8G8B8A8_UNORM,
+        Some(queue.queue_family_index()),
+    ).unwrap();
+
+    let depth_image = StorageImage::new(
+        &allocator, 
+        vulkano::image::ImageDimensions::Dim2d {
+            width: 1024,
+            height: 1024,
+            array_layers: 1
+        }, 
+        vulkano::format::Format::D16_UNORM,
+        Some(queue.queue_family_index()),
+    ).unwrap();
+
+    let additive_passes = vulkano::single_pass_renderpass!(
+        device.clone(),
+        attachments: {
+            color: {
+                load: Clear,
+                store: Store,
+                format: vulkano::format::Format::R8G8B8A8_UNORM,
+                samples: 1,
+        },
+            depth: {
+                load:Clear,
+                store: Store,
+                format: vulkano::format::Format::D16_UNORM,
+                samples: 1,
+            }
+    },
+        pass: {
+            color: [color],
+            depth_stencil: {depth}
+        }
+    ).unwrap();
+
+    println!("{:?}", additive_passes.attachments());
+
+    let view = ImageView::new_default(image.clone()).unwrap();
+    let depth_view = ImageView::new_default(depth_image.clone()).unwrap();
+    let framebuffer = Framebuffer::new(
+        additive_passes.clone(),
+        FramebufferCreateInfo {
+            attachments: vec![view, depth_view],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let mut command_buff_builder = AutoCommandBufferBuilder::primary(
+        &command_allocator,
+        queue.queue_family_index(), 
+        CommandBufferUsage::OneTimeSubmit
+    )
+    .unwrap();
+
+    let viewport = Viewport { 
+        origin: [0.0, 0.0], 
+        dimensions: [1024.0, 1024.0],
+        depth_range: 0.0..1.0,
+    };
 
     //Load Shaders
     let target_vs = shaders::target_vs::load(device.clone())
         .expect("Failed to Create Target Vertex Shader");
+    let target_frag = shaders::target_frag::load(device.clone())
+        .expect("Failed to Create Target Fragment Shader");
+    let _edge_detection = shaders::edge_detection::load(device.clone())
+        .expect("Failed to Create Edge Detection Shader");
+    let _edge_expansion = shaders::edge_expansion::load(device.clone())
+        .expect("Failed to Create Edge Expansion Shader");
 
     let additive_pipeline_builder = GraphicsPipeline::start()
         .vertex_input_state(BuffersDefinition::new().vertex::<CPUVertex>())
         .vertex_shader(target_vs.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new())
-        .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([fillme]))
-        .fragment_shader(, )
-        .render_pass(Subpass::from(, ))
+        .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([viewport]))
+        .fragment_shader(target_frag.entry_point("main").unwrap(), ())
+        .render_pass(Subpass::from(additive_passes.clone(), 0).unwrap())
         .build(device.clone())
         .expect("Pipeline Building Has Failed");
 
+    let png_buffer = CpuAccessibleBuffer::from_iter(
+        &allocator,
+        BufferUsage {
+            transfer_dst: true,
+            ..Default::default()
+        },
+        false,
+        (0..1024 * 1024 * 4).map(|_| 0u8),
+
+    )
+    .expect("Failed to create PNG buffer");
     
+    command_buff_builder
+        .begin_render_pass(
+            RenderPassBeginInfo {
+                clear_values: vec![Some([0.2, 0.2, 0.1, 1.0].into())],
+                ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
+            },
+            SubpassContents::Inline,
+        )
+        .unwrap()
+        .bind_pipeline_graphics(additive_pipeline_builder.clone())
+        .bind_vertex_buffers(0, gpu_target_buffer.clone())
+        .draw(target_vert_count, 1, 0, 0)
+        .unwrap()
+        .end_render_pass()
+        .unwrap()
+        .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(image, png_buffer.clone()))
+        .unwrap();
+
+    let command_buff = command_buff_builder.build().unwrap();
+
+    let future = sync::now(device.clone())
+        .then_execute(queue.clone(), command_buff)
+        .unwrap()
+        .then_signal_fence_and_flush()
+        .unwrap();
+
+    future.wait(None).unwrap();
+
+    let png_content = png_buffer.read().unwrap();
+    let png = ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &png_content[..]).unwrap();
+    png.save("test_img.png").unwrap();
+
+    println!("Rendering Finished")
 
 }
 
@@ -114,8 +251,8 @@ fn import_verts(mesh: & russimp::mesh::Mesh)
 
 
         let converted_vert = CPUVertex {
-            position: [x, y, z],
-            color: [0, 0, 255],
+            in_vert: [x, y, z],
+            in_color: [0.0, 0.0, 1.0, 1.0],
         };
 
         vertice_buffer.push(converted_vert);

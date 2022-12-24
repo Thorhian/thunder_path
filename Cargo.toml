@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 bytemuck = "1.12.3"
 clap = { version = "4.0.29", features = ["derive"] }
+image = "0.24.5"
 nalgebra = "0.31.4"
 russimp = "1.0.6"
 vulkano = "0.32.3"

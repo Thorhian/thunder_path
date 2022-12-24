@@ -15,7 +15,7 @@ float LinearizeDepth(float depth)
 }
 
 void main() {
-    vec4 newColor;
+    vec4 newColor = vec4(0.0, 0.0, 1.0, 1.0);
     if(v_color.b > 0.90) {
         newColor = vec4(v_color.r +  sqrt(gl_FragCoord.z), v_color.gba);
     } else {

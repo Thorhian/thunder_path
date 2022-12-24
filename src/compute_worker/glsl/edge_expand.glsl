@@ -3,7 +3,7 @@
 layout(location = 0) out vec4 outColor;
 
 layout(binding = 1) uniform sampler2D prev_render;
-layout(binding = 0) uniform mill_parameters {
+layout(binding = 0) uniform MillParameters {
     float cutterRadius;
 } params;
 
