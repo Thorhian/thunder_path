@@ -6,4 +6,3 @@ pub struct Job<'a> {
     pub target_mesh: &'a Mesh,
     pub stock_mesh: &'a Mesh,
 }
-

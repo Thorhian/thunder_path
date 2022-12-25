@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
-use vulkano::{VulkanLibrary, 
-    instance::{Instance, InstanceCreateInfo}};
+use vulkano::{
+    instance::{Instance, InstanceCreateInfo},
+    VulkanLibrary,
+};
 
-use vulkano::device::{Device, DeviceCreateInfo, QueueCreateInfo};
 use vulkano::device::Queue;
+use vulkano::device::{Device, DeviceCreateInfo, QueueCreateInfo};
 
 pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
     let v_lib = VulkanLibrary::new().unwrap();
@@ -14,7 +16,8 @@ pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
     let create_info = InstanceCreateInfo::default();
     let main_instance = Instance::new(v_lib, create_info).unwrap();
 
-    let dev_desc = main_instance.enumerate_physical_devices()
+    let dev_desc = main_instance
+        .enumerate_physical_devices()
         .unwrap()
         .next()
         .unwrap();
@@ -26,7 +29,8 @@ pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
         .position(|(_, q)| q.queue_flags.graphics)
         .expect("couldn't find a graphical queue family") as u32;
 
-    let (device, mut queues) = Device::new(dev_desc, 
+    let (device, mut queues) = Device::new(
+        dev_desc,
         DeviceCreateInfo {
             queue_create_infos: vec![QueueCreateInfo {
                 queue_family_index,
@@ -36,9 +40,8 @@ pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
         },
     )
     .expect("Failed to create device and queues.");
-    
+
     let queue = queues.next().unwrap();
 
-    return (device, queue)
-
+    return (device, queue);
 }

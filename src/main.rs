@@ -1,10 +1,10 @@
-pub mod job;
 pub mod compute_worker;
+pub mod job;
 
-use std::path::PathBuf;
 use clap::Parser;
 use russimp::scene;
 use russimp::scene::Scene;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -30,7 +30,7 @@ fn main() {
     let binding = cli.stock_model.into_os_string();
     let stock_path = binding.to_str().unwrap();
     let target_scene = Scene::from_file(target_path, post_process_target).unwrap();
-    let stock_scene =  Scene::from_file(stock_path, post_process_stock).unwrap();
+    let stock_scene = Scene::from_file(stock_path, post_process_stock).unwrap();
 
     let target_mesh = target_scene.meshes.first().unwrap();
     let stock_mesh = stock_scene.meshes.first().unwrap();
@@ -43,5 +43,4 @@ fn main() {
     };
 
     compute_worker::process_job(new_job);
-    
 }

@@ -1,20 +1,32 @@
 pub mod additive_renderer;
 pub mod shaders;
 
-use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
-use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassContents, CopyImageToBufferInfo};
-use vulkano::image::StorageImage;
-use vulkano::image::view::ImageView;
-use vulkano::memory::allocator::StandardMemoryAllocator;
-use vulkano::pipeline::GraphicsPipeline;
+use std::collections::BTreeMap;
+
 use bytemuck::{Pod, Zeroable};
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
+use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer};
+use vulkano::command_buffer::allocator::{
+    StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
+};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyImageToBufferInfo, RenderPassBeginInfo,
+    SubpassContents,
+};
+use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
+use vulkano::descriptor_set::layout::{
+    DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType,
+};
+use vulkano::descriptor_set::{self, DescriptorSet, PersistentDescriptorSet, WriteDescriptorSet};
+use vulkano::image::view::ImageView;
+use vulkano::image::StorageImage;
+use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
-use vulkano::render_pass::{Subpass, Framebuffer, FramebufferCreateInfo};
+use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
+use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, Subpass};
 use vulkano::sync::{self, GpuFuture};
 
 use image::{ImageBuffer, Rgba};
@@ -25,20 +37,22 @@ use crate::job::Job;
 #[derive(Default, Copy, Clone, Zeroable, Pod)]
 struct CPUVertex {
     in_vert: [f32; 3],
-    in_color: [f32; 4]
+    in_color: [f32; 4],
 }
 
 vulkano::impl_vertex!(CPUVertex, in_vert, in_color);
 
 pub fn process_job(job: Job) {
-    let (device , queue) = additive_renderer::initialize_device();
+    let (device, queue) = additive_renderer::initialize_device();
     let allocator = StandardMemoryAllocator::new_default(device.clone());
     let command_allocator = StandardCommandBufferAllocator::new(
         device.clone(),
         StandardCommandBufferAllocatorCreateInfo {
             ..Default::default()
-        }
+        },
     );
+
+    let descriptor_allocator = StandardDescriptorSetAllocator::new(device.clone());
 
     let target_model = job.target_mesh.clone();
     let stock_model = job.target_mesh.clone();
@@ -48,9 +62,13 @@ pub fn process_job(job: Job) {
     let _stock_vert_count: u32 = stock_vert_buff.len().try_into().unwrap();
 
     let ortho_matrix = nalgebra::Orthographic3::new(
-        target_bounds[0], target_bounds[1],
-        target_bounds[2], target_bounds[3],
-        target_bounds[4], target_bounds[5]);
+        target_bounds[0],
+        target_bounds[1],
+        target_bounds[2],
+        target_bounds[3],
+        target_bounds[4],
+        target_bounds[5],
+    );
 
     ortho_matrix.as_matrix().iter();
 
@@ -59,9 +77,9 @@ pub fn process_job(job: Job) {
         BufferUsage {
             vertex_buffer: true,
             ..Default::default()
-        }, 
-        false, 
-        target_vert_buff
+        },
+        false,
+        target_vert_buff,
     )
     .expect("Failed to create gpu_target_buffer");
 
@@ -72,32 +90,34 @@ pub fn process_job(job: Job) {
             ..Default::default()
         },
         false,
-        stock_vert_buff
+        stock_vert_buff,
     )
     .expect("Failed to create gpu_stock_buffer");
 
     //Allocate Image Target
     let image = StorageImage::new(
         &allocator,
-        vulkano::image::ImageDimensions::Dim2d { 
-            width: 1024,
-            height: 1024, 
-            array_layers: 1 
-        },
-        vulkano::format::Format::R8G8B8A8_UNORM,
-        Some(queue.queue_family_index()),
-    ).unwrap();
-
-    let depth_image = StorageImage::new(
-        &allocator, 
         vulkano::image::ImageDimensions::Dim2d {
             width: 1024,
             height: 1024,
-            array_layers: 1
-        }, 
+            array_layers: 1,
+        },
+        vulkano::format::Format::R8G8B8A8_UNORM,
+        Some(queue.queue_family_index()),
+    )
+    .unwrap();
+
+    let depth_image = StorageImage::new(
+        &allocator,
+        vulkano::image::ImageDimensions::Dim2d {
+            width: 1024,
+            height: 1024,
+            array_layers: 1,
+        },
         vulkano::format::Format::D16_UNORM,
         Some(queue.queue_family_index()),
-    ).unwrap();
+    )
+    .unwrap();
 
     let additive_passes = vulkano::single_pass_renderpass!(
         device.clone(),
@@ -119,9 +139,8 @@ pub fn process_job(job: Job) {
             color: [color],
             depth_stencil: {depth}
         }
-    ).unwrap();
-
-    println!("{:?}", additive_passes.attachments());
+    )
+    .unwrap();
 
     let view = ImageView::new_default(image.clone()).unwrap();
     let depth_view = ImageView::new_default(depth_image.clone()).unwrap();
@@ -136,26 +155,28 @@ pub fn process_job(job: Job) {
 
     let mut command_buff_builder = AutoCommandBufferBuilder::primary(
         &command_allocator,
-        queue.queue_family_index(), 
-        CommandBufferUsage::OneTimeSubmit
+        queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
     )
     .unwrap();
 
-    let viewport = Viewport { 
-        origin: [0.0, 0.0], 
+    let viewport = Viewport {
+        origin: [0.0, 0.0],
         dimensions: [1024.0, 1024.0],
         depth_range: 0.0..1.0,
     };
 
     //Load Shaders
-    let target_vs = shaders::target_vs::load(device.clone())
-        .expect("Failed to Create Target Vertex Shader");
+    let target_vs =
+        shaders::target_vs::load(device.clone()).expect("Failed to Create Target Vertex Shader");
     let target_frag = shaders::target_frag::load(device.clone())
         .expect("Failed to Create Target Fragment Shader");
     let _edge_detection = shaders::edge_detection::load(device.clone())
         .expect("Failed to Create Edge Detection Shader");
     let _edge_expansion = shaders::edge_expansion::load(device.clone())
         .expect("Failed to Create Edge Expansion Shader");
+
+    let target_frag_entry = target_frag.entry_point("main").unwrap();
 
     let additive_pipeline_builder = GraphicsPipeline::start()
         .vertex_input_state(BuffersDefinition::new().vertex::<CPUVertex>())
@@ -167,6 +188,14 @@ pub fn process_job(job: Job) {
         .build(device.clone())
         .expect("Pipeline Building Has Failed");
 
+    //Setup Descriptor Sets
+    let layout = additive_pipeline_builder
+        .layout()
+        .set_layouts()
+        .get(0)
+        .unwrap();
+    let desc_set = PersistentDescriptorSet::new(&descriptor_allocator, layout.clone(), []).unwrap();
+
     let png_buffer = CpuAccessibleBuffer::from_iter(
         &allocator,
         BufferUsage {
@@ -175,26 +204,35 @@ pub fn process_job(job: Job) {
         },
         false,
         (0..1024 * 1024 * 4).map(|_| 0u8),
-
     )
     .expect("Failed to create PNG buffer");
-    
+
     command_buff_builder
         .begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.2, 0.2, 0.1, 1.0].into())],
+                clear_values: vec![Some([0.2, 0.2, 0.1, 1.0].into()), Some(0.0.into())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
             },
             SubpassContents::Inline,
         )
         .unwrap()
         .bind_pipeline_graphics(additive_pipeline_builder.clone())
+        /*.bind_descriptor_sets(
+            PipelineBindPoint::Graphics,
+            additive_pipeline_builder.layout().clone(),
+            0,
+            desc_set.clone(),
+        )*/
         .bind_vertex_buffers(0, gpu_target_buffer.clone())
+        //.bind_descriptor_sets()
         .draw(target_vert_count, 1, 0, 0)
         .unwrap()
         .end_render_pass()
         .unwrap()
-        .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(image, png_buffer.clone()))
+        .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
+            image,
+            png_buffer.clone(),
+        ))
         .unwrap();
 
     let command_buff = command_buff_builder.build().unwrap();
@@ -212,20 +250,21 @@ pub fn process_job(job: Job) {
     png.save("test_img.png").unwrap();
 
     println!("Rendering Finished")
-
 }
 
-fn import_verts(mesh: & russimp::mesh::Mesh)
-                -> (Vec<CPUVertex>, Vec<f32>) {
+fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<CPUVertex>, Vec<f32>) {
     let vertices = mesh.vertices.iter();
-    let first_vert = mesh.vertices
-        .first()
-        .expect("No Vertices Found in Mesh");
+    let first_vert = mesh.vertices.first().expect("No Vertices Found in Mesh");
 
     let mut vertice_buffer: Vec<CPUVertex> = Vec::new();
-    let mut bounds: Vec<f32> = vec![first_vert.x, first_vert.x,
-                                    first_vert.y, first_vert.y,
-                                    first_vert.z, first_vert.z];
+    let mut bounds: Vec<f32> = vec![
+        first_vert.x,
+        first_vert.x,
+        first_vert.y,
+        first_vert.y,
+        first_vert.z,
+        first_vert.z,
+    ];
 
     for vertex in vertices {
         let (x, y, z) = (vertex.x, vertex.y, vertex.z);
@@ -249,7 +288,6 @@ fn import_verts(mesh: & russimp::mesh::Mesh)
             bounds[4] = z;
         }
 
-
         let converted_vert = CPUVertex {
             in_vert: [x, y, z],
             in_color: [0.0, 0.0, 1.0, 1.0],
@@ -258,8 +296,7 @@ fn import_verts(mesh: & russimp::mesh::Mesh)
         vertice_buffer.push(converted_vert);
     }
 
-    return (vertice_buffer, bounds)
-
+    return (vertice_buffer, bounds);
 }
 
 pub fn find_rectangle_points(
@@ -277,12 +314,16 @@ pub fn find_rectangle_points(
     let point3 = Vector2::new(norm_rad2[1], -norm_rad2[0]) + center1;
     let point4 = Vector2::new(-norm_rad2[1], norm_rad2[0]) + center1;
     let mut points = vec![point1, point2, point3, point4];
-    points.sort_unstable_by(|p1, p2|{
+    points.sort_unstable_by(|p1, p2| {
         let mut p1_rad = p1[1].atan2(p1[0]);
         let mut p2_rad = p2[1].atan2(p2[0]);
 
-        if p1_rad < 0.0 { p1_rad += std::f32::consts::PI * 2.0 }
-        if p2_rad < 0.0 { p2_rad += std::f32::consts::PI * 2.0 }
+        if p1_rad < 0.0 {
+            p1_rad += std::f32::consts::PI * 2.0
+        }
+        if p2_rad < 0.0 {
+            p2_rad += std::f32::consts::PI * 2.0
+        }
 
         p1_rad.partial_cmp(&p2_rad).unwrap()
     });
