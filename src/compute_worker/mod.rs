@@ -15,7 +15,7 @@ use vulkano::command_buffer::{
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::image::view::ImageView;
-use vulkano::image::StorageImage;
+use vulkano::image::{StorageImage, ImageUsage, ImageCreateFlags};
 use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
@@ -110,8 +110,7 @@ pub fn process_job(job: Job) {
         Some(queue.queue_family_index()),
     )
     .unwrap();
-
-    let depth_image = StorageImage::new(
+    let depth_image = StorageImage::with_usage(
         &allocator,
         vulkano::image::ImageDimensions::Dim2d {
             width: 1024,
@@ -119,6 +118,11 @@ pub fn process_job(job: Job) {
             array_layers: 1,
         },
         vulkano::format::Format::D16_UNORM,
+        ImageUsage {
+            depth_stencil_attachment: true,
+            ..Default::default()
+        },
+        ImageCreateFlags::empty(),
         Some(queue.queue_family_index()),
     )
     .unwrap();
