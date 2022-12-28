@@ -1,8 +1,6 @@
 pub mod additive_renderer;
 pub mod shaders;
 
-use std::collections::BTreeMap;
-
 use bytemuck::{Pod, Zeroable};
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
@@ -15,10 +13,7 @@ use vulkano::command_buffer::{
     SubpassContents,
 };
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
-use vulkano::descriptor_set::layout::{
-    DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType,
-};
-use vulkano::descriptor_set::{self, DescriptorSet, PersistentDescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::image::view::ImageView;
 use vulkano::image::StorageImage;
 use vulkano::memory::allocator::StandardMemoryAllocator;
@@ -61,16 +56,25 @@ pub fn process_job(job: Job) {
     let target_vert_count: u32 = target_vert_buff.len().try_into().unwrap();
     let _stock_vert_count: u32 = stock_vert_buff.len().try_into().unwrap();
 
-    let ortho_matrix = nalgebra::Orthographic3::new(
-        target_bounds[0],
-        target_bounds[1],
-        target_bounds[2],
-        target_bounds[3],
-        target_bounds[4],
-        target_bounds[5],
+    let ortho_matrix = generate_ortho_matrix(
+        target_bounds[0].into(),
+        target_bounds[1].into(),
+        target_bounds[2].into(),
+        target_bounds[3].into(),
+        target_bounds[5].into(),
+        target_bounds[4].into(),
     );
 
-    ortho_matrix.as_matrix().iter();
+    let ortho_uniform_buffer = CpuAccessibleBuffer::from_data(
+        &allocator, 
+        BufferUsage {
+            uniform_buffer: true,
+            ..Default::default()
+        }, 
+        false, 
+        ortho_matrix
+    )
+    .expect("Failed to create ortho matrix buffer");
 
     let gpu_target_buffer = CpuAccessibleBuffer::from_iter(
         &allocator,
@@ -176,8 +180,6 @@ pub fn process_job(job: Job) {
     let _edge_expansion = shaders::edge_expansion::load(device.clone())
         .expect("Failed to Create Edge Expansion Shader");
 
-    let target_frag_entry = target_frag.entry_point("main").unwrap();
-
     let additive_pipeline_builder = GraphicsPipeline::start()
         .vertex_input_state(BuffersDefinition::new().vertex::<CPUVertex>())
         .vertex_shader(target_vs.entry_point("main").unwrap(), ())
@@ -194,7 +196,10 @@ pub fn process_job(job: Job) {
         .set_layouts()
         .get(0)
         .unwrap();
-    let desc_set = PersistentDescriptorSet::new(&descriptor_allocator, layout.clone(), []).unwrap();
+    let desc_set = PersistentDescriptorSet::new(&descriptor_allocator,
+        layout.clone(),
+        [WriteDescriptorSet::buffer(0, ortho_uniform_buffer)])
+        .unwrap();
 
     let png_buffer = CpuAccessibleBuffer::from_iter(
         &allocator,
@@ -217,12 +222,12 @@ pub fn process_job(job: Job) {
         )
         .unwrap()
         .bind_pipeline_graphics(additive_pipeline_builder.clone())
-        /*.bind_descriptor_sets(
+        .bind_descriptor_sets(
             PipelineBindPoint::Graphics,
             additive_pipeline_builder.layout().clone(),
             0,
             desc_set.clone(),
-        )*/
+        )
         .bind_vertex_buffers(0, gpu_target_buffer.clone())
         //.bind_descriptor_sets()
         .draw(target_vert_count, 1, 0, 0)
@@ -270,22 +275,22 @@ fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<CPUVertex>, Vec<f32>) {
         let (x, y, z) = (vertex.x, vertex.y, vertex.z);
 
         if x < bounds[0] {
-            bounds[0] = x;
+            bounds[0] = x; //Left
         }
         if x > bounds[1] {
-            bounds[1] = x;
+            bounds[1] = x; //Right
         }
         if y < bounds[2] {
-            bounds[2] = y;
+            bounds[2] = y; //Down
         }
         if y > bounds[3] {
-            bounds[3] = y;
+            bounds[3] = y; //Up
         }
         if z < bounds[5] {
-            bounds[5] = z;
+            bounds[5] = z; //Near
         }
         if z > bounds[4] {
-            bounds[4] = z;
+            bounds[4] = z; //Far
         }
 
         let converted_vert = CPUVertex {
@@ -329,4 +334,39 @@ pub fn find_rectangle_points(
     });
 
     Matrix2x4::from_columns(&points)
+}
+
+// Learned math from 
+// https://github.com/PacktPublishing/Vulkan-Cookbook/blob/master/Library/Source%20Files/10%20Helper%20Recipes/05%20Preparing%20an%20orthographic%20projection%20matrix.cpp
+fn generate_ortho_matrix(
+    left_plane: f64,
+    right_plane: f64,
+    bottom_plane: f64,
+    top_plane: f64,
+    near_plane: f64,
+    far_plane: f64
+) -> nalgebra::Matrix4<f64> {
+    let ortho_matrix = nalgebra::Matrix4::new(
+        2.0 / (right_plane - left_plane),
+        0.0,
+        0.0,
+        0.0,
+
+        0.0,
+        2.0 / (bottom_plane - top_plane),
+        0.0,
+        0.0,
+
+        0.0,
+        0.0,
+        1.0 / (near_plane - far_plane),
+        0.0,
+
+        -(right_plane + left_plane) / (right_plane - left_plane),
+        -(bottom_plane + top_plane) / (bottom_plane - top_plane),
+        near_plane / (near_plane - far_plane),
+        1.0
+    );
+
+    return ortho_matrix;
 }
