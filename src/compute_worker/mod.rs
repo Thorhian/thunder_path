@@ -1,6 +1,8 @@
 pub mod additive_renderer;
 pub mod shaders;
 
+use std::ptr::null;
+
 use bytemuck::{Pod, Zeroable};
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
@@ -26,6 +28,8 @@ use vulkano::sync::{self, GpuFuture};
 
 use image::{ImageBuffer, Rgba};
 
+use renderdoc;
+
 use crate::job::Job;
 
 #[repr(C)]
@@ -38,6 +42,8 @@ struct CPUVertex {
 vulkano::impl_vertex!(CPUVertex, in_vert, in_color);
 
 pub fn process_job(job: Job) {
+    let mut renderdoc_res = renderdoc::RenderDoc::<renderdoc::V140>::new();
+
     let (device, queue) = additive_renderer::initialize_device();
     let allocator = StandardMemoryAllocator::new_default(device.clone());
     let command_allocator = StandardCommandBufferAllocator::new(
@@ -46,6 +52,15 @@ pub fn process_job(job: Job) {
             ..Default::default()
         },
     );
+
+    renderdoc_res = match renderdoc_res {
+        Ok(mut api) => {
+            api.start_frame_capture(null(), null());
+            Ok(api)
+        },
+
+        Err(error) => Err(error),
+    };
 
     let descriptor_allocator = StandardDescriptorSetAllocator::new(device.clone());
 
@@ -258,7 +273,23 @@ pub fn process_job(job: Job) {
     let png = ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &png_content[..]).unwrap();
     png.save("test_img.png").unwrap();
 
+    renderdoc_res = match renderdoc_res {
+        Ok(mut api) => {
+            api.end_frame_capture(null(), null());
+            Ok(api)
+        },
+
+        Err(error) => Err(error)
+    };
+
+    match renderdoc_res {
+        Ok(_) => println!("Capture Data Should have been created."),
+        Err(err) => println!("No Data Captured: {}", err),
+    }
+
     println!("Rendering Finished")
+
+
 }
 
 fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<CPUVertex>, Vec<f32>) {
