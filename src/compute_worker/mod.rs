@@ -19,6 +19,7 @@ use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::image::view::ImageView;
 use vulkano::image::{StorageImage, ImageUsage, ImageCreateFlags};
 use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
@@ -76,7 +77,7 @@ pub fn process_job(job: Job) {
         target_bounds[1].into(),
         target_bounds[2].into(),
         target_bounds[3].into(),
-        target_bounds[5].into(),
+        (target_bounds[5] - 10.0).into(),
         target_bounds[4].into(),
     );
     println!("Ortho Matrix: {}", ortho_matrix);
@@ -153,8 +154,8 @@ pub fn process_job(job: Job) {
                 samples: 1,
         },
             depth: {
-                load:Clear,
-                store: Store,
+                load: Clear,
+                store: DontCare,
                 format: vulkano::format::Format::D16_UNORM,
                 samples: 1,
             }
@@ -206,6 +207,7 @@ pub fn process_job(job: Job) {
         .input_assembly_state(InputAssemblyState::new())
         .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([viewport]))
         .fragment_shader(target_frag.entry_point("main").unwrap(), ())
+        .depth_stencil_state(DepthStencilState::simple_depth_test())
         .render_pass(Subpass::from(additive_passes.clone(), 0).unwrap())
         .build(device.clone())
         .expect("Pipeline Building Has Failed");
@@ -235,7 +237,7 @@ pub fn process_job(job: Job) {
     command_buff_builder
         .begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(0.0.into())],
+                clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1.0.into())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
             },
             SubpassContents::Inline,
