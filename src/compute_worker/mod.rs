@@ -79,6 +79,7 @@ pub fn process_job(job: Job) {
         target_bounds[5].into(),
         target_bounds[4].into(),
     );
+    println!("Ortho Matrix: {}", ortho_matrix);
 
     let ortho_uniform_buffer = CpuAccessibleBuffer::from_data(
         &allocator, 
@@ -234,7 +235,7 @@ pub fn process_job(job: Job) {
     command_buff_builder
         .begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.2, 0.2, 0.1, 1.0].into()), Some(0.0.into())],
+                clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(0.0.into())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
             },
             SubpassContents::Inline,
@@ -374,13 +375,13 @@ pub fn find_rectangle_points(
 // Learned math from 
 // https://github.com/PacktPublishing/Vulkan-Cookbook/blob/master/Library/Source%20Files/10%20Helper%20Recipes/05%20Preparing%20an%20orthographic%20projection%20matrix.cpp
 fn generate_ortho_matrix(
-    left_plane: f64,
-    right_plane: f64,
-    bottom_plane: f64,
-    top_plane: f64,
-    near_plane: f64,
-    far_plane: f64
-) -> nalgebra::Matrix4<f64> {
+    left_plane: f32,
+    right_plane: f32,
+    bottom_plane: f32,
+    top_plane: f32,
+    near_plane: f32,
+    far_plane: f32
+) -> nalgebra::Matrix4<f32> {
     let ortho_matrix = nalgebra::Matrix4::new(
         2.0 / (right_plane - left_plane),
         0.0,
@@ -403,5 +404,5 @@ fn generate_ortho_matrix(
         1.0
     );
 
-    return ortho_matrix;
+    return ortho_matrix.transpose();
 }
