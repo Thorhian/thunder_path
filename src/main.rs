@@ -1,4 +1,4 @@
-pub mod compute_worker;
+pub mod gpu;
 pub mod job;
 
 use clap::Parser;
@@ -42,5 +42,5 @@ fn main() {
         stock_mesh,
     };
 
-    compute_worker::process_job(new_job);
+    gpu::process_job(new_job);
 }
