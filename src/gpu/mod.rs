@@ -1,21 +1,24 @@
 pub mod shaders;
 use crate::job::Job;
 
-use std::error::Error;
 use std::println;
-use std::ptr::null;
 use std::sync::Arc;
-use bytemuck::{Pod, Zeroable};
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use image::{ImageBuffer, Rgba};
 use renderdoc;
 use vulkano::LoadingError;
+use vulkano::buffer::BufferContents;
 use vulkano::device;
 use vulkano::device::DeviceExtensions;
 use vulkano::device::physical::PhysicalDevice;
+use vulkano::image::ImageAccess;
 use vulkano::image::SwapchainImage;
 use vulkano::instance::InstanceExtensions;
+use vulkano::memory::allocator::FreeListAllocator;
+use vulkano::memory::allocator::GenericMemoryAllocator;
+use vulkano::pipeline::graphics::vertex_input::Vertex;
+use vulkano::render_pass;
 use vulkano::render_pass::RenderPass;
 use vulkano::{
     instance::{Instance, InstanceCreateInfo},
@@ -58,9 +61,12 @@ use winit::{
 };
 
 #[repr(C)]
-#[derive(Default, Copy, Clone, Zeroable, Pod)]
+#[derive(BufferContents, Vertex)]
 struct CPUVertex {
+    #[format(R32G32B32_SFLOAT)]
     in_vert: [f32; 3],
+
+    #[format(R32G32B32A32_SFLOAT)]
     in_color: [f32; 4],
 }
 
@@ -79,7 +85,9 @@ struct GPUInstance {
     viewport: Viewport,
     swapchain: Option<Arc<Swapchain>>,
     swap_images: Option<Vec<Arc<SwapchainImage>>>,
-    standard_mem_alloc: StandardMemoryAllocator,
+    gui_renderpass: Option<Arc<RenderPass>>,
+    gui_framebuffers: Option<Vec<Arc<Framebuffer>>>,
+    standard_mem_alloc: GenericMemoryAllocator<Arc<FreeListAllocator>>,
     command_buff_allocator: StandardCommandBufferAllocator,
 }
 
@@ -104,7 +112,7 @@ impl GPUInstance {
         if spawn_window {
             let event_loop = Some(EventLoop::new());
             let surface = Some(WindowBuilder::new()
-                .build_vk_surface(&event_loop.unwrap(), instance)
+                .build_vk_surface(&event_loop.unwrap(), instance.clone())
                 .unwrap());
         }
         
@@ -137,7 +145,7 @@ impl GPUInstance {
                 if queue.queue_flags.intersects(device::QueueFlags::TRANSFER) {
                     transfer_queue = Some(i as u32);
                 }
-                if physical_device.surface_support(i as u32, &surface).unwrap_or(false) {
+                if physical_device.surface_support(i as u32, &surface.unwrap()).unwrap_or(false) {
                     presentation_queue = Some(i as u32);
                 }
             }
@@ -162,7 +170,7 @@ impl GPUInstance {
                                  compute_queue.unwrap(),
                                  transfer_queue.unwrap()];
 
-        let queue_info: Vec<QueueCreateInfo> = Vec::new();
+        let mut queue_info: Vec<QueueCreateInfo> = Vec::new();
         for i in queue_indices {
             queue_info.push(
                 QueueCreateInfo {
@@ -233,8 +241,25 @@ impl GPUInstance {
 
         let memory_alloc = StandardMemoryAllocator::new_default(device.clone());
 
-        let mut framebuffers = window_size_depen
-        
+        let mut gui_renderpass: Option<Arc<RenderPass>> = None;
+        if spawn_window {
+            gui_renderpass = Some(Self::create_gui_renderpass(
+                device.clone(),
+                swapchain.as_ref().unwrap().clone()
+            ));
+        }
+
+        let mut gui_framebuffers: Option<Vec<Arc<Framebuffer>>> = None;
+        if spawn_window {
+            gui_framebuffers = Some(Self::create_gui_framebuffers(
+                &swap_images.as_ref().unwrap(), gui_renderpass.as_ref().unwrap(), &mut viewport
+            ));
+        }
+
+        let command_buff_allocator = 
+        StandardCommandBufferAllocator::new(
+            device.clone(), Default::default()
+        );
 
         return Ok(GPUInstance { 
             spawn_window,
@@ -251,19 +276,21 @@ impl GPUInstance {
             viewport,
             swapchain,
             swap_images,
+            gui_renderpass,
+            gui_framebuffers,
             standard_mem_alloc: memory_alloc,
-            command_buff_allocator: ()
+            command_buff_allocator
         });
         
     }
 
-
+    // Creates renderpass for demo UI
     fn create_gui_renderpass(
         device: Arc<Device>,
         swapchain: Arc<Swapchain>
     ) -> Arc<RenderPass> {
-        vulkano::single_pass_renderpass!(
-            device,
+        return vulkano::single_pass_renderpass!(
+            device.clone(),
             attachments: {
                 color: {
                 load: Clear,
@@ -276,16 +303,35 @@ impl GPUInstance {
                 color: [color],
                 depth_stencil: {},
             },
-        );
+        ).unwrap();
     }
 
-    /*fn create_gui_framebuffers(
+    fn create_gui_framebuffers(
         images: &[Arc<SwapchainImage>],
-        rend
-    )*/
+        render_pass: &Arc<RenderPass>,
+        viewport: &mut Viewport
+    ) -> Vec<Arc<Framebuffer>> {
+        let dimensions = images[0].dimensions().width_height();
+        viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
+
+        images
+            .iter()
+            .map(|image| {
+                let view = ImageView::new_default(image.clone()).unwrap();
+                Framebuffer::new(
+                    render_pass.clone(),
+                    FramebufferCreateInfo {
+                        attachments: vec![view],
+                        ..Default::default()
+                    },
+                )
+                    .unwrap()
+            })
+            .collect::<Vec<Arc<Framebuffer>>>()
+    }
 }
 
-pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
+/*pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
     let v_lib = VulkanLibrary::new().unwrap();
 
     println!("API Version: {}", v_lib.api_version());
@@ -323,11 +369,9 @@ pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
     let queue = queues.next().unwrap();
 
     return (device, queue);
-}
+}*/
 
-vulkano::impl_vertex!(CPUVertex, in_vert, in_color);
-
-pub fn process_job(job: Job) {
+/*pub fn process_job(job: Job) {
     let mut renderdoc_res = renderdoc::RenderDoc::<renderdoc::V140>::new();
 
     let (device, queue) = initialize_device();
@@ -578,7 +622,7 @@ pub fn process_job(job: Job) {
     println!("Rendering Finished")
 
 
-}
+}*/
 
 fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<CPUVertex>, Vec<f32>) {
     let vertices = mesh.vertices.iter();

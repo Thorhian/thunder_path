@@ -42,5 +42,5 @@ fn main() {
         stock_mesh,
     };
 
-    gpu::process_job(new_job);
+    //gpu::process_job(new_job);
 }
