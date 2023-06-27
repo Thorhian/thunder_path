@@ -36,7 +36,6 @@ use vulkano::{
     memory::allocator::StandardMemoryAllocator,
     pipeline::graphics::depth_stencil::DepthStencilState,
     pipeline::graphics::input_assembly::InputAssemblyState,
-    pipeline::graphics::vertex_input::BuffersDefinition,
     pipeline::graphics::viewport::{Viewport, ViewportState},
     pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint},
     render_pass::{Framebuffer, FramebufferCreateInfo, Subpass},
@@ -98,20 +97,20 @@ impl GPUInstance {
             Err(error) => return Err(error),
         };
 
-        let required_instance_extensions = vulkano_win::required_extensions(&library);
-        let mut instance_create_info = InstanceCreateInfo {
+        let required_instance_extensions = vulkano_win::required_extensions(&library.clone());
+        let instance_create_info = InstanceCreateInfo {
             application_name: Some(String::from("Thunder Path")),
             enabled_extensions: required_instance_extensions,
             ..Default::default()
         };
 
-        let instance = Instance::new(library, instance_create_info).unwrap();
+        let instance = Instance::new(library.clone(), instance_create_info).unwrap();
 
         let event_loop: Option<EventLoop<()>> = None;
-        let surface: Option<Arc<Surface>> = None;
+        let mut surface: Option<Arc<Surface>> = None;
         if spawn_window {
             let event_loop = Some(EventLoop::new());
-            let surface = Some(WindowBuilder::new()
+            surface = Some(WindowBuilder::new()
                 .build_vk_surface(&event_loop.unwrap(), instance.clone())
                 .unwrap());
         }
@@ -145,7 +144,7 @@ impl GPUInstance {
                 if queue.queue_flags.intersects(device::QueueFlags::TRANSFER) {
                     transfer_queue = Some(i as u32);
                 }
-                if physical_device.surface_support(i as u32, &surface.unwrap()).unwrap_or(false) {
+                if physical_device.surface_support(i as u32, &surface.as_ref().unwrap().clone()).unwrap_or(false) {
                     presentation_queue = Some(i as u32);
                 }
             }
@@ -171,10 +170,10 @@ impl GPUInstance {
                                  transfer_queue.unwrap()];
 
         let mut queue_info: Vec<QueueCreateInfo> = Vec::new();
-        for i in queue_indices {
+        for i in &queue_indices {
             queue_info.push(
                 QueueCreateInfo {
-                    queue_family_index: i,
+                    queue_family_index: *i,
                     ..Default::default()
                 });
         }
@@ -185,7 +184,7 @@ impl GPUInstance {
             physical_device.properties().device_type,
             );
 
-        let (device, mut queues_iter) = Device::new(physical_device, DeviceCreateInfo {
+        let (device, queues_iter) = Device::new(physical_device.clone(), DeviceCreateInfo {
             enabled_extensions: device_extensions,
             queue_create_infos: queue_info,
             ..Default::default()
@@ -198,22 +197,22 @@ impl GPUInstance {
         if spawn_window {
             let surface_capabilities = device
                 .physical_device()
-                .surface_capabilities(&surface.unwrap(), Default::default())
+                .surface_capabilities(&surface.as_ref().unwrap().clone(), Default::default())
                 .unwrap();
             
             let surface_format = Some(
                 device
                     .physical_device()
-                    .surface_formats(&surface.unwrap(), Default::default())
+                    .surface_formats(&surface.as_ref().unwrap().clone(), Default::default())
                     .unwrap()[0]
                     .0,
             );
-            let window = surface.unwrap().object()
+            let window = surface.as_ref().unwrap().object()
                 .unwrap().downcast_ref::<Window>().unwrap();
 
             let (some_swapchain, some_swap_images) = Swapchain::new(
                 device.clone(), 
-                surface.unwrap().clone(), 
+                surface.as_ref().unwrap().clone(), 
                 SwapchainCreateInfo {
                     min_image_count: surface_capabilities.min_image_count,
                     image_format: surface_format,
@@ -328,6 +327,10 @@ impl GPUInstance {
                     .unwrap()
             })
             .collect::<Vec<Arc<Framebuffer>>>()
+    }
+
+    fn create_gui_mesh_pipeline() {
+
     }
 }
 

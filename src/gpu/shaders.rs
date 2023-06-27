@@ -25,3 +25,10 @@ pub mod edge_expansion {
         path: "src/gpu/glsl/edge_expand.glsl"
     }
 }
+
+pub mod gui_mesh_vert {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/gpu/glsl/gui_mesh_vertex.glsl"
+    }
+}
