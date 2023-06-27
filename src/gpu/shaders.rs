@@ -32,3 +32,10 @@ pub mod gui_mesh_vert {
         path: "src/gpu/glsl/gui_mesh_vertex.glsl"
     }
 }
+
+pub mod gui_mesh_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/gpu/glsl/gui_mesh_frag.glsl"
+    }
+}

@@ -2,9 +2,11 @@ pub mod shaders;
 use crate::job::Job;
 
 use std::println;
+use bytemuck::Pod;
 use std::sync::Arc;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
+use nalgebra::Vector3;
 use image::{ImageBuffer, Rgba};
 use renderdoc;
 use vulkano::LoadingError;
@@ -15,8 +17,6 @@ use vulkano::device::physical::PhysicalDevice;
 use vulkano::image::ImageAccess;
 use vulkano::image::SwapchainImage;
 use vulkano::instance::InstanceExtensions;
-use vulkano::memory::allocator::FreeListAllocator;
-use vulkano::memory::allocator::GenericMemoryAllocator;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
 use vulkano::render_pass;
 use vulkano::render_pass::RenderPass;
@@ -40,7 +40,7 @@ use vulkano::{
     pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint},
     render_pass::{Framebuffer, FramebufferCreateInfo, Subpass},
     sync::{self, GpuFuture},
-    buffer::BufferUsage,
+    buffer::{Buffer, BufferUsage, BufferCreateInfo},
     command_buffer::allocator::{
         StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
     },
@@ -48,7 +48,11 @@ use vulkano::{
         AutoCommandBufferBuilder, CommandBufferUsage, CopyImageToBufferInfo, RenderPassBeginInfo,
         SubpassContents,
     },
-    swapchain::Surface
+    swapchain::Surface,
+    memory::allocator::FreeListAllocator,
+    memory::allocator::GenericMemoryAllocator,
+    memory::allocator::AllocationCreateInfo,
+    memory::allocator::MemoryUsage,
 };
 
 use vulkano_win::VkSurfaceBuild;
@@ -61,7 +65,7 @@ use winit::{
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
-struct CPUVertex {
+struct ModelVertex {
     #[format(R32G32B32_SFLOAT)]
     in_vert: [f32; 3],
 
@@ -69,7 +73,7 @@ struct CPUVertex {
     in_color: [f32; 4],
 }
 
-struct GPUInstance {
+pub struct GPUInstance {
     spawn_window: bool,
     library: Arc<VulkanLibrary>,
     instance: Arc<Instance>,
@@ -305,7 +309,7 @@ impl GPUInstance {
         ).unwrap();
     }
 
-    fn create_gui_framebuffers(
+    pub fn create_gui_framebuffers(
         images: &[Arc<SwapchainImage>],
         render_pass: &Arc<RenderPass>,
         viewport: &mut Viewport
@@ -329,10 +333,64 @@ impl GPUInstance {
             .collect::<Vec<Arc<Framebuffer>>>()
     }
 
-    fn create_gui_mesh_pipeline() {
+    pub fn create_gui_mesh_pipeline(&self)
+    -> Arc<GraphicsPipeline> {
+        let v_shader = shaders::gui_mesh_vert::load(self.device.clone()).unwrap();
+        let f_shader = shaders::gui_mesh_frag::load(self.device.clone()).unwrap();
 
+        let gui_renderpass = self.gui_renderpass.as_ref().unwrap().clone();
+        let subpass = Subpass::from(gui_renderpass, 0).unwrap();
+        return GraphicsPipeline::start()
+            .render_pass(subpass)
+            .vertex_input_state(ModelVertex::per_vertex())
+            .input_assembly_state(InputAssemblyState::new())
+            .vertex_shader(v_shader.entry_point("main").unwrap(), ())
+            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+            .fragment_shader(f_shader.entry_point("main").unwrap(), ())
+            .build(self.device.clone())
+            .unwrap();
     }
 }
+
+struct SceneContents {
+    mesh_models: Vec<Vec<ModelVertex>>,
+    pipelines: Vec<Arc<GraphicsPipeline>>,
+    mesh_pipe_indices: Vec<u32>,
+}
+
+pub fn run_gui_loop(gpu_instance: &Arc<GPUInstance>,) {
+    let event_loop = gpu_instance.event_loop.as_ref().unwrap();
+
+    let mut recreate_swapchain = false;
+    event_loop.run(move |event, _, control_flow| {
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                    *control_flow = ControlFlow::Exit;
+                }
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
+                ..
+            } => {
+                    recreate_swapchain = true;
+                }
+            Event::RedrawEventsCleared => {
+                let window = gpu_instance.surface.as_ref()
+                    .unwrap().object().unwrap().downcast_ref::<Window>().unwrap();
+
+                let dimensions = window.inner_size();
+                if dimensions.width == 0 || dimensions.height == 0 {
+                    return;
+                }
+            }
+            _ => todo!()
+        }
+    });
+}
+
+
 
 /*pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
     let v_lib = VulkanLibrary::new().unwrap();
@@ -627,11 +685,11 @@ impl GPUInstance {
 
 }*/
 
-fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<CPUVertex>, Vec<f32>) {
+fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<ModelVertex>, Vec<f32>) {
     let vertices = mesh.vertices.iter();
     let first_vert = mesh.vertices.first().expect("No Vertices Found in Mesh");
 
-    let mut vertice_buffer: Vec<CPUVertex> = Vec::new();
+    let mut vertice_buffer: Vec<ModelVertex> = Vec::new();
     let mut bounds: Vec<f32> = vec![
         first_vert.x,
         first_vert.x,
@@ -663,7 +721,7 @@ fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<CPUVertex>, Vec<f32>) {
             bounds[4] = z; //Far
         }
 
-        let converted_vert = CPUVertex {
+        let converted_vert = ModelVertex {
             in_vert: [x, y, z],
             in_color: [0.0, 0.0, 1.0, 1.0],
         };

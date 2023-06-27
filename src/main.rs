@@ -16,6 +16,7 @@ struct Cli {
     x_offset: f32,
     y_offset: f32,
     z_offset: f32,
+    gui: bool,
 }
 
 fn main() {
