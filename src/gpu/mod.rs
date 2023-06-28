@@ -4,27 +4,22 @@ use crate::job::Job;
 use std::println;
 use bytemuck::Pod;
 use std::sync::Arc;
+use std::sync::RwLock;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use nalgebra::Vector3;
 use image::{ImageBuffer, Rgba};
 use renderdoc;
-use vulkano::LoadingError;
-use vulkano::buffer::BufferContents;
-use vulkano::device;
-use vulkano::device::DeviceExtensions;
-use vulkano::device::physical::PhysicalDevice;
-use vulkano::image::ImageAccess;
-use vulkano::image::SwapchainImage;
-use vulkano::instance::InstanceExtensions;
-use vulkano::pipeline::graphics::vertex_input::Vertex;
-use vulkano::render_pass;
-use vulkano::render_pass::RenderPass;
+
 use vulkano::{
+    LoadingError,
     instance::{Instance, InstanceCreateInfo},
     VulkanLibrary,
-    device::Queue,
-    device::{Device, DeviceCreateInfo, QueueCreateInfo},
+    device,
+    device::{
+        Device, DeviceCreateInfo, QueueCreateInfo, Queue,
+        DeviceExtensions, physical::PhysicalDevice,
+    },
     swapchain::{
         Swapchain, SwapchainCreateInfo, acquire_next_image, AcquireError,
         SwapchainCreationError, SwapchainPresentInfo
@@ -32,15 +27,19 @@ use vulkano::{
     descriptor_set::allocator::StandardDescriptorSetAllocator,
     descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
     image::view::ImageView,
-    image::{StorageImage, ImageUsage, ImageCreateFlags},
+    image::{StorageImage, ImageUsage, ImageCreateFlags, SwapchainImage},
     memory::allocator::StandardMemoryAllocator,
+    instance::InstanceExtensions,
     pipeline::graphics::depth_stencil::DepthStencilState,
     pipeline::graphics::input_assembly::InputAssemblyState,
     pipeline::graphics::viewport::{Viewport, ViewportState},
+    pipeline::graphics::vertex_input::Vertex,
     pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint},
+    render_pass,
+    render_pass::RenderPass,
     render_pass::{Framebuffer, FramebufferCreateInfo, Subpass},
     sync::{self, GpuFuture},
-    buffer::{Buffer, BufferUsage, BufferCreateInfo},
+    buffer::{Buffer, BufferUsage, BufferCreateInfo, BufferContents},
     command_buffer::allocator::{
         StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
     },
@@ -78,7 +77,6 @@ pub struct GPUInstance {
     library: Arc<VulkanLibrary>,
     instance: Arc<Instance>,
     instance_extensions: InstanceExtensions,
-    event_loop: Option<EventLoop<()>>,
     surface: Option<Arc<Surface>>,
     device_extensions: DeviceExtensions,
     physical_device: Arc<PhysicalDevice>,
@@ -86,8 +84,8 @@ pub struct GPUInstance {
     queue_family_indices: Vec<u32>,
     queues: Vec<Arc<Queue>>,
     viewport: Viewport,
-    swapchain: Option<Arc<Swapchain>>,
-    swap_images: Option<Vec<Arc<SwapchainImage>>>,
+    swapchain: Option<RwLock<Arc<Swapchain>>>,
+    swap_images: Option<RwLock<Vec<Arc<SwapchainImage>>>>,
     gui_renderpass: Option<Arc<RenderPass>>,
     gui_framebuffers: Option<Vec<Arc<Framebuffer>>>,
     standard_mem_alloc: GenericMemoryAllocator<Arc<FreeListAllocator>>,
@@ -95,7 +93,8 @@ pub struct GPUInstance {
 }
 
 impl GPUInstance {
-    pub fn initialize_instance(spawn_window: bool) -> Result<GPUInstance, LoadingError> {
+    pub fn initialize_instance(spawn_window: bool) 
+    -> Result<(GPUInstance, Option<EventLoop<()>>), LoadingError> {
         let library = match VulkanLibrary::new() {
             Ok(library) => library,
             Err(error) => return Err(error),
@@ -196,8 +195,8 @@ impl GPUInstance {
 
         let queues = Vec::from_iter(queues_iter.into_iter());
 
-        let mut swapchain: Option<Arc<Swapchain>> = None;
-        let mut swap_images: Option<Vec<Arc<SwapchainImage>>> = None;
+        let mut swapchain: Option<RwLock<Arc<Swapchain>>> = None;
+        let mut swap_images: Option<RwLock<Vec<Arc<SwapchainImage>>>> = None;
         if spawn_window {
             let surface_capabilities = device
                 .physical_device()
@@ -232,8 +231,8 @@ impl GPUInstance {
                 }
             ).unwrap();
 
-            swapchain = Some(some_swapchain);
-            swap_images = Some(some_swap_images);
+            swapchain = Some(RwLock::new(some_swapchain));
+            swap_images = Some(RwLock::new(some_swap_images));
         }
 
         let mut viewport = Viewport {
@@ -264,27 +263,31 @@ impl GPUInstance {
             device.clone(), Default::default()
         );
 
-        return Ok(GPUInstance { 
-            spawn_window,
-            library,
-            instance,
-            instance_extensions: required_instance_extensions,
-            event_loop,
-            surface,
-            device_extensions,
-            physical_device,
-            device,
-            queue_family_indices: queue_indices,
-            queues,
-            viewport,
-            swapchain,
-            swap_images,
-            gui_renderpass,
-            gui_framebuffers,
-            standard_mem_alloc: memory_alloc,
-            command_buff_allocator
-        });
-        
+
+
+        return Ok(
+            (GPUInstance { 
+                spawn_window,
+                library,
+                instance,
+                instance_extensions: required_instance_extensions,
+                surface,
+                device_extensions,
+                physical_device,
+                device,
+                queue_family_indices: queue_indices,
+                queues,
+                viewport,
+                swapchain,
+                swap_images,
+                gui_renderpass,
+                gui_framebuffers,
+                standard_mem_alloc: memory_alloc,
+                command_buff_allocator
+            },
+            event_loop)
+        );
+
     }
 
     // Creates renderpass for demo UI
@@ -314,7 +317,8 @@ impl GPUInstance {
         render_pass: &Arc<RenderPass>,
         viewport: &mut Viewport
     ) -> Vec<Arc<Framebuffer>> {
-        let dimensions = images[0].dimensions().width_height();
+        let dimensions = images.first().unwrap().swapchain().image_extent();
+
         viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
 
         images
@@ -358,10 +362,11 @@ struct SceneContents {
     mesh_pipe_indices: Vec<u32>,
 }
 
-pub fn run_gui_loop(gpu_instance: &Arc<GPUInstance>,) {
-    let event_loop = gpu_instance.event_loop.as_ref().unwrap();
+pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
+    event_loop: EventLoop<()>) {
 
     let mut recreate_swapchain = false;
+    let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent {
@@ -383,6 +388,20 @@ pub fn run_gui_loop(gpu_instance: &Arc<GPUInstance>,) {
                 let dimensions = window.inner_size();
                 if dimensions.width == 0 || dimensions.height == 0 {
                     return;
+                }
+
+                previous_frame_end.as_mut().unwrap().cleanup_finished();
+
+                if recreate_swapchain {
+                    let (new_swapchain, new_images) =
+                    match swapchain.recreate(SwapchainCreateInfo {
+                        image_extent: dimensions.into(),
+                        ..gpu_instance.swapchain.unwrap().create_info()
+                    }) {
+                            Ok(r) => r,
+                            Err(SwapchainCreationError::ImageExtentNotSupported { .. }) => return,
+                            Err(e) => panic!("failed to recreate swapchain: {e}"),
+                    };
                 }
             }
             _ => todo!()
