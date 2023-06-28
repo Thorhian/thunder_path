@@ -1,13 +1,9 @@
 pub mod shaders;
-use crate::job::Job;
 
 use std::println;
-use bytemuck::Pod;
 use std::sync::Arc;
-use std::sync::RwLock;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
-use nalgebra::Vector3;
 use image::{ImageBuffer, Rgba};
 use renderdoc;
 
@@ -72,29 +68,31 @@ struct ModelVertex {
     in_color: [f32; 4],
 }
 
+pub struct GuiResources {
+    surface: Arc<Surface>,
+    viewport: Viewport,
+    swapchain: Arc<Swapchain>,
+    swapchain_images: Vec<Arc<SwapchainImage>>,
+    gui_renderpass: Arc<RenderPass>,
+    gui_framebuffers: Vec<Arc<Framebuffer>>,
+}
+
 pub struct GPUInstance {
-    spawn_window: bool,
     library: Arc<VulkanLibrary>,
     instance: Arc<Instance>,
     instance_extensions: InstanceExtensions,
-    surface: Option<Arc<Surface>>,
     device_extensions: DeviceExtensions,
     physical_device: Arc<PhysicalDevice>,
     device: Arc<Device>,
     queue_family_indices: Vec<u32>,
     queues: Vec<Arc<Queue>>,
-    viewport: Viewport,
-    swapchain: Option<RwLock<Arc<Swapchain>>>,
-    swap_images: Option<RwLock<Vec<Arc<SwapchainImage>>>>,
-    gui_renderpass: Option<Arc<RenderPass>>,
-    gui_framebuffers: Option<Vec<Arc<Framebuffer>>>,
     standard_mem_alloc: GenericMemoryAllocator<Arc<FreeListAllocator>>,
     command_buff_allocator: StandardCommandBufferAllocator,
 }
 
 impl GPUInstance {
     pub fn initialize_instance(spawn_window: bool) 
-    -> Result<(GPUInstance, Option<EventLoop<()>>), LoadingError> {
+    -> Result<(GPUInstance, Option<EventLoop<()>>, Option<GuiResources>), LoadingError> {
         let library = match VulkanLibrary::new() {
             Ok(library) => library,
             Err(error) => return Err(error),
@@ -110,13 +108,6 @@ impl GPUInstance {
         let instance = Instance::new(library.clone(), instance_create_info).unwrap();
 
         let event_loop: Option<EventLoop<()>> = None;
-        let mut surface: Option<Arc<Surface>> = None;
-        if spawn_window {
-            let event_loop = Some(EventLoop::new());
-            surface = Some(WindowBuilder::new()
-                .build_vk_surface(&event_loop.unwrap(), instance.clone())
-                .unwrap());
-        }
         
         let available_devices = instance
             .enumerate_physical_devices()
@@ -125,6 +116,14 @@ impl GPUInstance {
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
             ..DeviceExtensions::empty()
+        };
+        
+        let surface = if spawn_window {
+            Some(WindowBuilder::new()
+                .build_vk_surface(&event_loop.unwrap(), instance.clone())
+                .unwrap())
+        } else {
+            None
         };
 
         let mut graphics_queue: Option<u32> = None;
@@ -147,7 +146,9 @@ impl GPUInstance {
                 if queue.queue_flags.intersects(device::QueueFlags::TRANSFER) {
                     transfer_queue = Some(i as u32);
                 }
-                if physical_device.surface_support(i as u32, &surface.as_ref().unwrap().clone()).unwrap_or(false) {
+                if spawn_window && physical_device.surface_support(
+                    i as u32,
+                    &surface.as_ref().unwrap().clone()).unwrap_or(false) {
                     presentation_queue = Some(i as u32);
                 }
             }
@@ -195,27 +196,41 @@ impl GPUInstance {
 
         let queues = Vec::from_iter(queues_iter.into_iter());
 
-        let mut swapchain: Option<RwLock<Arc<Swapchain>>> = None;
-        let mut swap_images: Option<RwLock<Vec<Arc<SwapchainImage>>>> = None;
-        if spawn_window {
+        let memory_alloc = StandardMemoryAllocator::new_default(device.clone());
+
+        let command_buff_allocator = 
+        StandardCommandBufferAllocator::new(
+            device.clone(), Default::default()
+        );
+
+        let event_loop = if spawn_window {
+            Some(EventLoop::new())
+        } else {
+            None
+        };
+
+        //Generate GUI data if desired, return optional struct
+        let gui_resources = if spawn_window {
+            let surface = surface.unwrap();
+
             let surface_capabilities = device
                 .physical_device()
-                .surface_capabilities(&surface.as_ref().unwrap().clone(), Default::default())
+                .surface_capabilities(&surface.clone(), Default::default())
                 .unwrap();
             
             let surface_format = Some(
                 device
                     .physical_device()
-                    .surface_formats(&surface.as_ref().unwrap().clone(), Default::default())
+                    .surface_formats(&surface.clone(), Default::default())
                     .unwrap()[0]
                     .0,
             );
-            let window = surface.as_ref().unwrap().object()
+            let window = surface.object()
                 .unwrap().downcast_ref::<Window>().unwrap();
 
-            let (some_swapchain, some_swap_images) = Swapchain::new(
+            let (swapchain, swapchain_images) = Swapchain::new(
                 device.clone(), 
-                surface.as_ref().unwrap().clone(), 
+                surface.clone(), 
                 SwapchainCreateInfo {
                     min_image_count: surface_capabilities.min_image_count,
                     image_format: surface_format,
@@ -231,61 +246,47 @@ impl GPUInstance {
                 }
             ).unwrap();
 
-            swapchain = Some(RwLock::new(some_swapchain));
-            swap_images = Some(RwLock::new(some_swap_images));
-        }
+            let mut viewport = Viewport {
+                origin: [0.0, 0.0],
+                dimensions: [0.0, 0.0],
+                depth_range: 0.0..1.0,
+            };
 
-        let mut viewport = Viewport {
-            origin: [0.0, 0.0],
-            dimensions: [0.0, 0.0],
-            depth_range: 0.0..1.0,
-        };
-
-        let memory_alloc = StandardMemoryAllocator::new_default(device.clone());
-
-        let mut gui_renderpass: Option<Arc<RenderPass>> = None;
-        if spawn_window {
-            gui_renderpass = Some(Self::create_gui_renderpass(
+            let gui_renderpass = Self::create_gui_renderpass(
                 device.clone(),
-                swapchain.as_ref().unwrap().clone()
-            ));
-        }
+                swapchain.clone()
+            );
 
-        let mut gui_framebuffers: Option<Vec<Arc<Framebuffer>>> = None;
-        if spawn_window {
-            gui_framebuffers = Some(Self::create_gui_framebuffers(
-                &swap_images.as_ref().unwrap(), gui_renderpass.as_ref().unwrap(), &mut viewport
-            ));
-        }
+            let gui_framebuffers = Self::create_gui_framebuffers(
+                &swapchain_images, &gui_renderpass, &mut viewport
+            );
 
-        let command_buff_allocator = 
-        StandardCommandBufferAllocator::new(
-            device.clone(), Default::default()
-        );
-
-
-
-        return Ok(
-            (GPUInstance { 
-                spawn_window,
-                library,
-                instance,
-                instance_extensions: required_instance_extensions,
+            Some(GuiResources {
                 surface,
-                device_extensions,
-                physical_device,
-                device,
-                queue_family_indices: queue_indices,
-                queues,
                 viewport,
                 swapchain,
-                swap_images,
+                swapchain_images,
                 gui_renderpass,
-                gui_framebuffers,
-                standard_mem_alloc: memory_alloc,
-                command_buff_allocator
-            },
-            event_loop)
+                gui_framebuffers
+            })
+        } else {
+            None
+        };
+
+        return Ok((GPUInstance { 
+            library,
+            instance,
+            instance_extensions: required_instance_extensions,
+            device_extensions,
+            physical_device,
+            device,
+            queue_family_indices: queue_indices,
+            queues,
+            standard_mem_alloc: memory_alloc,
+            command_buff_allocator
+        },
+            event_loop,
+            gui_resources)
         );
 
     }
@@ -337,12 +338,12 @@ impl GPUInstance {
             .collect::<Vec<Arc<Framebuffer>>>()
     }
 
-    pub fn create_gui_mesh_pipeline(&self)
+    pub fn create_gui_mesh_pipeline(&self, gui_resources: &GuiResources)
     -> Arc<GraphicsPipeline> {
         let v_shader = shaders::gui_mesh_vert::load(self.device.clone()).unwrap();
         let f_shader = shaders::gui_mesh_frag::load(self.device.clone()).unwrap();
 
-        let gui_renderpass = self.gui_renderpass.as_ref().unwrap().clone();
+        let gui_renderpass = gui_resources.gui_renderpass.clone();
         let subpass = Subpass::from(gui_renderpass, 0).unwrap();
         return GraphicsPipeline::start()
             .render_pass(subpass)
@@ -355,18 +356,30 @@ impl GPUInstance {
             .unwrap();
     }
 }
+pub enum MeshType {
+    TargetMesh,
+    StockMesh,
+    ObstacleMesh,
+}
+
+pub struct MeshModel {
+    vbo_contents: Vec<ModelVertex>,
+    mesh_type: MeshType
+}
 
 struct SceneContents {
-    mesh_models: Vec<Vec<ModelVertex>>,
+    mesh_models: Vec<MeshModel>,
     pipelines: Vec<Arc<GraphicsPipeline>>,
     mesh_pipe_indices: Vec<u32>,
 }
 
 pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
-    event_loop: EventLoop<()>) {
+    event_loop: EventLoop<()>,
+    mut gui_resources: GuiResources,
+) {
 
     let mut recreate_swapchain = false;
-    let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
+    let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()));
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent {
@@ -382,8 +395,8 @@ pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
                     recreate_swapchain = true;
                 }
             Event::RedrawEventsCleared => {
-                let window = gpu_instance.surface.as_ref()
-                    .unwrap().object().unwrap().downcast_ref::<Window>().unwrap();
+                let window = gui_resources.surface
+                    .object().unwrap().downcast_ref::<Window>().unwrap();
 
                 let dimensions = window.inner_size();
                 if dimensions.width == 0 || dimensions.height == 0 {
@@ -394,9 +407,9 @@ pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
 
                 if recreate_swapchain {
                     let (new_swapchain, new_images) =
-                    match swapchain.recreate(SwapchainCreateInfo {
+                    match gui_resources.swapchain.recreate(SwapchainCreateInfo {
                         image_extent: dimensions.into(),
-                        ..gpu_instance.swapchain.unwrap().create_info()
+                        ..gui_resources.swapchain.create_info()
                     }) {
                             Ok(r) => r,
                             Err(SwapchainCreationError::ImageExtentNotSupported { .. }) => return,
