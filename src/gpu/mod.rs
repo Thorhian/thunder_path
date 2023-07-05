@@ -5,8 +5,10 @@ use std::sync::Arc;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use image::{ImageBuffer, Rgba};
+use nalgebra::Vector3;
 use renderdoc;
 
+use vulkano::buffer::Subbuffer;
 use vulkano::{
     LoadingError,
     instance::{Instance, InstanceCreateInfo},
@@ -15,6 +17,7 @@ use vulkano::{
     device::{
         Device, DeviceCreateInfo, QueueCreateInfo, Queue,
         DeviceExtensions, physical::PhysicalDevice,
+        QueueFlags,
     },
     swapchain::{
         Swapchain, SwapchainCreateInfo, acquire_next_image, AcquireError,
@@ -60,7 +63,7 @@ use winit::{
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
-struct ModelVertex {
+pub struct ModelVertex {
     #[format(R32G32B32_SFLOAT)]
     in_vert: [f32; 3],
 
@@ -79,15 +82,16 @@ pub struct GuiResources {
 
 pub struct GPUInstance {
     library: Arc<VulkanLibrary>,
-    instance: Arc<Instance>,
+    pub instance: Arc<Instance>,
     instance_extensions: InstanceExtensions,
     device_extensions: DeviceExtensions,
     physical_device: Arc<PhysicalDevice>,
-    device: Arc<Device>,
-    queue_family_indices: Vec<u32>,
-    queues: Vec<Arc<Queue>>,
-    standard_mem_alloc: GenericMemoryAllocator<Arc<FreeListAllocator>>,
-    command_buff_allocator: StandardCommandBufferAllocator,
+    pub device: Arc<Device>,
+    pub queue_family_indices: Vec<(u32, QueueFlags)>,
+    pub queues: Vec<Arc<Queue>>,
+    pub standard_mem_alloc: GenericMemoryAllocator<Arc<FreeListAllocator>>,
+    pub command_buff_allocator: StandardCommandBufferAllocator,
+    pub descriptor_allocator: StandardDescriptorSetAllocator,
 }
 
 impl GPUInstance {
@@ -137,13 +141,13 @@ impl GPUInstance {
                 continue;
             }
             for (i, queue) in queues.iter().enumerate() {
-                if queue.queue_flags.intersects(device::QueueFlags::GRAPHICS) {
+                if queue.queue_flags.intersects(QueueFlags::GRAPHICS) {
                     graphics_queue = Some(i as u32);
                 }
-                if queue.queue_flags.intersects(device::QueueFlags::COMPUTE) {
+                if queue.queue_flags.intersects(QueueFlags::COMPUTE) {
                     compute_queue = Some(i as u32);
                 }
-                if queue.queue_flags.intersects(device::QueueFlags::TRANSFER) {
+                if queue.queue_flags.intersects(QueueFlags::TRANSFER) {
                     transfer_queue = Some(i as u32);
                 }
                 if spawn_window && physical_device.surface_support(
@@ -153,31 +157,39 @@ impl GPUInstance {
                 }
             }
 
-            if graphics_queue.is_some() && presentation_queue.is_some() &&
-                compute_queue.is_some() && transfer_queue.is_some() {
-                    chosen_physical_device = Some(physical_device);
-                    break;
-                } else {
-                    graphics_queue = None;
-                    presentation_queue = None;
-                    compute_queue = None;
-                    transfer_queue = None;
-                }
+            if graphics_queue.is_some() && 
+            (presentation_queue.is_some() || !spawn_window) &&
+            compute_queue.is_some() && transfer_queue.is_some()
+            {
+                chosen_physical_device = Some(physical_device);
+                break;
+            }
+            else {
+                graphics_queue = None;
+                presentation_queue = None;
+                compute_queue = None;
+                transfer_queue = None;
+            }
         }
 
         let physical_device = chosen_physical_device
             .expect("no suitable physical device found");
 
-        let queue_indices = vec![graphics_queue.unwrap(), 
-                                 presentation_queue.unwrap(),
-                                 compute_queue.unwrap(),
-                                 transfer_queue.unwrap()];
+        let mut queue_indices = vec![(graphics_queue.unwrap(), QueueFlags::GRAPHICS), 
+                                     (compute_queue.unwrap(), QueueFlags::COMPUTE),
+                                     (transfer_queue.unwrap(), QueueFlags::TRANSFER)];
+
+        if spawn_window {
+            queue_indices.push(
+                (presentation_queue.unwrap(), QueueFlags::GRAPHICS)
+            );
+        }
 
         let mut queue_info: Vec<QueueCreateInfo> = Vec::new();
         for i in &queue_indices {
             queue_info.push(
                 QueueCreateInfo {
-                    queue_family_index: *i,
+                    queue_family_index: i.0,
                     ..Default::default()
                 });
         }
@@ -202,6 +214,9 @@ impl GPUInstance {
         StandardCommandBufferAllocator::new(
             device.clone(), Default::default()
         );
+
+        let descriptor_allocator =
+            StandardDescriptorSetAllocator::new(device.clone());
 
         let event_loop = if spawn_window {
             Some(EventLoop::new())
@@ -283,7 +298,8 @@ impl GPUInstance {
             queue_family_indices: queue_indices,
             queues,
             standard_mem_alloc: memory_alloc,
-            command_buff_allocator
+            command_buff_allocator,
+            descriptor_allocator
         },
             event_loop,
             gui_resources)
@@ -338,6 +354,21 @@ impl GPUInstance {
             .collect::<Vec<Arc<Framebuffer>>>()
     }
 
+    pub fn gather_layouts(scene: &SceneContents, 
+        desc_alloc: &StandardDescriptorSetAllocator) {
+        let layout = scene.pipelines[0]
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+
+        let desc_set = PersistentDescriptorSet::new(
+            desc_alloc,
+            layout.clone(),
+            [WriteDescriptorSet::buffer(0, buffer)]
+        );
+    }
+
     pub fn create_gui_mesh_pipeline(&self, gui_resources: &GuiResources)
     -> Arc<GraphicsPipeline> {
         let v_shader = shaders::gui_mesh_vert::load(self.device.clone()).unwrap();
@@ -353,7 +384,7 @@ impl GPUInstance {
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
             .fragment_shader(f_shader.entry_point("main").unwrap(), ())
             .build(self.device.clone())
-            .unwrap();
+            .expect("failed to create gui pipeline!")
     }
 }
 pub enum MeshType {
@@ -362,21 +393,36 @@ pub enum MeshType {
     ObstacleMesh,
 }
 
+
 pub struct MeshModel {
-    vbo_contents: Vec<ModelVertex>,
-    mesh_type: MeshType
+    pub vbo_contents: Vec<ModelVertex>,
+    pub mesh_type: MeshType,
+    pub bounds: [f32; 6]
 }
 
-struct SceneContents {
-    mesh_models: Vec<MeshModel>,
-    pipelines: Vec<Arc<GraphicsPipeline>>,
-    mesh_pipe_indices: Vec<u32>,
+pub struct PipelineDependencies {
+    pub vbo: Subbuffer<[ModelVertex]>,
+}
+
+pub struct SceneContents {
+    pub pipeline_dependencies: Vec<PipelineDependencies>,
+    pub pipelines: Vec<Arc<GraphicsPipeline>>,
+    pub mesh_pipe_indices: Vec<usize>,
 }
 
 pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
     event_loop: EventLoop<()>,
     mut gui_resources: GuiResources,
+    scene: SceneContents
 ) {
+    let gfx_queue_indice = gpu_instance.queue_family_indices[0];
+    assert!(gfx_queue_indice.1 == QueueFlags::GRAPHICS);
+    let graphics_queue = gpu_instance.queues[gfx_queue_indice.0 as usize].clone();
+
+    let command_buffer_allocater = StandardCommandBufferAllocator::new(
+        gpu_instance.device.clone(),
+        Default::default(),
+    );
 
     let mut recreate_swapchain = false;
     let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()));
@@ -415,7 +461,55 @@ pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
                             Err(SwapchainCreationError::ImageExtentNotSupported { .. }) => return,
                             Err(e) => panic!("failed to recreate swapchain: {e}"),
                     };
+
+                    gui_resources.swapchain = new_swapchain;
+                    gui_resources.swapchain_images = new_images.clone();
+                    gui_resources.gui_framebuffers = GPUInstance::create_gui_framebuffers(
+                        &new_images, 
+                        &gui_resources.gui_renderpass, 
+                        &mut gui_resources.viewport
+                    );
+
+                    recreate_swapchain = false;
                 }
+
+                let (image_index, suboptimal, acquire_future) =
+                    match acquire_next_image(gui_resources.swapchain.clone(), None) {
+                    Ok(r) => r,
+                    Err(AcquireError::OutOfDate) => {
+                        recreate_swapchain = true;
+                        return;
+                    }
+                    Err(e) => panic!("failed to acquire next image: {e}"),
+                };
+
+                if suboptimal {
+                    recreate_swapchain = true;
+                }
+
+                let mut builder = AutoCommandBufferBuilder::primary(
+                    &command_buffer_allocater,
+                    graphics_queue.queue_family_index(),
+                    CommandBufferUsage::OneTimeSubmit,
+                )
+                    .expect("failed to create command buffer builder");
+
+                builder
+                    .begin_render_pass(
+                        RenderPassBeginInfo {
+                            clear_values: vec![Some([0.1, 0.1, 0.1, 1.0].into())],
+                            ..RenderPassBeginInfo::framebuffer(
+                                gui_resources.gui_framebuffers[image_index as usize].clone(),
+                            )
+                        },
+                        SubpassContents::Inline,
+                    )
+                    .unwrap()
+                    .set_viewport(0, [gui_resources.viewport.clone()])
+                    .bind_pipeline_graphics(scene.pipelines[0].clone());
+                
+                    //.bind_vertex_buffers(0, );
+                    //TODO: Need to create vertex buffer GPU side
             }
             _ => todo!()
         }
@@ -717,12 +811,12 @@ pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
 
 }*/
 
-fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<ModelVertex>, Vec<f32>) {
+pub fn import_verts(mesh: &russimp::mesh::Mesh, color: Vector3<f32>) -> (Vec<ModelVertex>, [f32; 6]) {
     let vertices = mesh.vertices.iter();
     let first_vert = mesh.vertices.first().expect("No Vertices Found in Mesh");
 
     let mut vertice_buffer: Vec<ModelVertex> = Vec::new();
-    let mut bounds: Vec<f32> = vec![
+    let mut bounds: [f32; 6] = [
         first_vert.x,
         first_vert.x,
         first_vert.y,
@@ -755,7 +849,7 @@ fn import_verts(mesh: &russimp::mesh::Mesh) -> (Vec<ModelVertex>, Vec<f32>) {
 
         let converted_vert = ModelVertex {
             in_vert: [x, y, z],
-            in_color: [0.0, 0.0, 1.0, 1.0],
+            in_color: [color.x, color.y, color.z, 1.0],
         };
 
         vertice_buffer.push(converted_vert);
