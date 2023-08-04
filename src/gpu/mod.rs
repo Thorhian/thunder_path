@@ -54,6 +54,7 @@ use vulkano::{
 };
 
 use vulkano_win::VkSurfaceBuild;
+use winit::event::ElementState;
 //use vulkano_win::VkSurfaceBuild;
 use winit::{
     event::{Event, WindowEvent},
@@ -111,7 +112,11 @@ impl GPUInstance {
 
         let instance = Instance::new(library.clone(), instance_create_info).unwrap();
 
-        let event_loop: Option<EventLoop<()>> = None;
+        let event_loop: Option<EventLoop<()>> = if spawn_window {
+            Some(EventLoop::new())
+        } else {
+            None
+        };
         
         let available_devices = instance
             .enumerate_physical_devices()
@@ -362,11 +367,11 @@ impl GPUInstance {
             .get(0)
             .unwrap();
 
-        let desc_set = PersistentDescriptorSet::new(
+        /*let desc_set = PersistentDescriptorSet::new(
             desc_alloc,
             layout.clone(),
             [WriteDescriptorSet::buffer(0, buffer)]
-        );
+        );*/
     }
 
     pub fn create_gui_mesh_pipeline(&self, gui_resources: &GuiResources)

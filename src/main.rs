@@ -14,6 +14,9 @@ use vulkano::sync::GpuFuture;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+extern crate clap;
+//use clap::{Arg, App, Subcommand};
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -24,6 +27,8 @@ struct Cli {
     x_offset: f32,
     y_offset: f32,
     z_offset: f32,
+
+    #[arg(short, long, default_value_t = true)]
     gui: bool,
 }
 
@@ -75,6 +80,7 @@ fn main() {
 
         let mut pipeline_deps: Vec<PipelineDependencies> = Vec::new();
         for model in mesh_models {
+            let vbo_size = model.vbo_contents.len();
             let vbo_stage = Buffer::from_iter(
                 &gpu_instance.standard_mem_alloc,
                 vulkano::buffer::BufferCreateInfo {
@@ -98,11 +104,11 @@ fn main() {
                     usage: MemoryUsage::DeviceOnly,
                     ..Default::default()
                 },
-                (std::mem::size_of::<gpu::ModelVertex>() * model.vbo_contents.len()) as DeviceSize
+                (std::mem::size_of::<gpu::ModelVertex>() * vbo_size) as DeviceSize
             ).unwrap();
 
             let queue_index = gpu_instance.queue_family_indices[0].clone().0;
-            let gfx_queue = gpu_instance.queues[queue_index as usize];
+            let gfx_queue = &gpu_instance.queues[queue_index as usize];
 
             let mut cbb = AutoCommandBufferBuilder::primary(
                 &gpu_instance.command_buff_allocator,

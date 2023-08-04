@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 bytemuck = "1.12.3"
-clap = { version = "4.0.29", features = ["derive"] }
+clap = { version = "4.3.11", features = ["derive"] }
 image = "0.24.5"
 nalgebra = {version = "0.31.4", features = ["bytemuck"] }
 renderdoc = "0.10.1"
