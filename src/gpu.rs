@@ -1,66 +1,60 @@
 pub mod shaders;
+pub mod window;
 
-use std::println;
-use std::sync::Arc;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
-use image::{ImageBuffer, Rgba};
 use nalgebra::Vector3;
-use renderdoc;
+use std::println;
+use std::sync::Arc;
+use winit::event_loop::EventLoop;
+use winit::window::Window;
+use winit::window::WindowBuilder;
+//use renderdoc;
 
 use vulkano::buffer::Subbuffer;
 use vulkano::{
-    LoadingError,
-    instance::{Instance, InstanceCreateInfo},
-    VulkanLibrary,
-    device,
-    device::{
-        Device, DeviceCreateInfo, QueueCreateInfo, Queue,
-        DeviceExtensions, physical::PhysicalDevice,
-        QueueFlags,
-    },
-    swapchain::{
-        Swapchain, SwapchainCreateInfo, acquire_next_image, AcquireError,
-        SwapchainCreationError, SwapchainPresentInfo
-    },
-    descriptor_set::allocator::StandardDescriptorSetAllocator,
-    descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
-    image::view::ImageView,
-    image::{StorageImage, ImageUsage, ImageCreateFlags, SwapchainImage},
-    memory::allocator::StandardMemoryAllocator,
-    instance::InstanceExtensions,
-    pipeline::graphics::depth_stencil::DepthStencilState,
-    pipeline::graphics::input_assembly::InputAssemblyState,
-    pipeline::graphics::viewport::{Viewport, ViewportState},
-    pipeline::graphics::vertex_input::Vertex,
-    pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint},
-    render_pass,
-    render_pass::RenderPass,
-    render_pass::{Framebuffer, FramebufferCreateInfo, Subpass},
-    sync::{self, GpuFuture},
-    buffer::{Buffer, BufferUsage, BufferCreateInfo, BufferContents},
-    command_buffer::allocator::{
-        StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
-    },
-    command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, CopyImageToBufferInfo, RenderPassBeginInfo,
+    buffer::BufferContents,
+    command_buffer::allocator::StandardCommandBufferAllocator,
+    /*command_buffer::{
+        AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo,
         SubpassContents,
+    },*/
+    descriptor_set::allocator::StandardDescriptorSetAllocator,
+    //device,
+    device::{
+        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions,
+        Queue, QueueCreateInfo, QueueFlags,
     },
-    swapchain::Surface,
+    //descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
+    image::view::ImageView,
+    image::{ImageUsage, SwapchainImage},
+    instance::InstanceExtensions,
+    instance::{Instance, InstanceCreateInfo},
     memory::allocator::FreeListAllocator,
     memory::allocator::GenericMemoryAllocator,
-    memory::allocator::AllocationCreateInfo,
-    memory::allocator::MemoryUsage,
+    memory::allocator::StandardMemoryAllocator,
+    //pipeline::graphics::depth_stencil::DepthStencilState,
+    pipeline::graphics::input_assembly::InputAssemblyState,
+    pipeline::graphics::vertex_input::Vertex,
+    pipeline::graphics::viewport::{Viewport, ViewportState},
+    pipeline::{GraphicsPipeline, Pipeline},
+    //render_pass,
+    render_pass::RenderPass,
+    render_pass::{Framebuffer, FramebufferCreateInfo, Subpass},
+    swapchain::Surface,
+    swapchain::{
+        //acquire_next_image,
+        //AcquireError,
+        Swapchain,
+        SwapchainCreateInfo,
+        //SwapchainCreationError, //SwapchainPresentInfo
+    },
+    //sync::{self, GpuFuture},
+    LoadingError,
+    VulkanLibrary,
 };
 
 use vulkano_win::VkSurfaceBuild;
-use winit::event::ElementState;
-//use vulkano_win::VkSurfaceBuild;
-use winit::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::{Window, WindowBuilder},
-};
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
@@ -96,41 +90,47 @@ pub struct GPUInstance {
 }
 
 impl GPUInstance {
-    pub fn initialize_instance(spawn_window: bool) 
-    -> Result<(GPUInstance, Option<EventLoop<()>>, Option<GuiResources>), LoadingError> {
+    pub fn initialize_instance(
+        spawn_window: bool,
+    ) -> Result<
+        (GPUInstance, Option<EventLoop<()>>, Option<GuiResources>),
+        LoadingError,
+    > {
         let library = match VulkanLibrary::new() {
             Ok(library) => library,
             Err(error) => return Err(error),
         };
 
-        let required_instance_extensions = vulkano_win::required_extensions(&library.clone());
+        let required_instance_extensions =
+            vulkano_win::required_extensions(&library.clone());
         let instance_create_info = InstanceCreateInfo {
             application_name: Some(String::from("Thunder Path")),
             enabled_extensions: required_instance_extensions,
             ..Default::default()
         };
 
-        let instance = Instance::new(library.clone(), instance_create_info).unwrap();
+        let instance =
+            Instance::new(library.clone(), instance_create_info).unwrap();
 
         let event_loop: Option<EventLoop<()>> = if spawn_window {
             Some(EventLoop::new())
         } else {
             None
         };
-        
-        let available_devices = instance
-            .enumerate_physical_devices()
-            .unwrap();
+
+        let available_devices = instance.enumerate_physical_devices().unwrap();
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
             ..DeviceExtensions::empty()
         };
-        
+
         let surface = if spawn_window {
-            Some(WindowBuilder::new()
-                .build_vk_surface(&event_loop.unwrap(), instance.clone())
-                .unwrap())
+            Some(
+                WindowBuilder::new()
+                    .build_vk_surface(&event_loop.unwrap(), instance.clone())
+                    .unwrap(),
+            )
         } else {
             None
         };
@@ -142,7 +142,10 @@ impl GPUInstance {
         let mut chosen_physical_device: Option<Arc<PhysicalDevice>> = None;
         for physical_device in available_devices {
             let queues = physical_device.queue_family_properties();
-            if physical_device.supported_extensions().contains(&device_extensions) {
+            if !physical_device
+                .supported_extensions()
+                .contains(&device_extensions)
+            {
                 continue;
             }
             for (i, queue) in queues.iter().enumerate() {
@@ -155,21 +158,26 @@ impl GPUInstance {
                 if queue.queue_flags.intersects(QueueFlags::TRANSFER) {
                     transfer_queue = Some(i as u32);
                 }
-                if spawn_window && physical_device.surface_support(
-                    i as u32,
-                    &surface.as_ref().unwrap().clone()).unwrap_or(false) {
+                if spawn_window
+                    && physical_device
+                        .surface_support(
+                            i as u32,
+                            &surface.as_ref().unwrap().clone(),
+                        )
+                        .unwrap_or(false)
+                {
                     presentation_queue = Some(i as u32);
                 }
             }
 
-            if graphics_queue.is_some() && 
-            (presentation_queue.is_some() || !spawn_window) &&
-            compute_queue.is_some() && transfer_queue.is_some()
+            if graphics_queue.is_some()
+                && (presentation_queue.is_some() || !spawn_window)
+                && compute_queue.is_some()
+                && transfer_queue.is_some()
             {
                 chosen_physical_device = Some(physical_device);
                 break;
-            }
-            else {
+            } else {
                 graphics_queue = None;
                 presentation_queue = None;
                 compute_queue = None;
@@ -177,47 +185,51 @@ impl GPUInstance {
             }
         }
 
-        let physical_device = chosen_physical_device
-            .expect("no suitable physical device found");
+        let physical_device =
+            chosen_physical_device.expect("no suitable physical device found");
 
-        let mut queue_indices = vec![(graphics_queue.unwrap(), QueueFlags::GRAPHICS), 
-                                     (compute_queue.unwrap(), QueueFlags::COMPUTE),
-                                     (transfer_queue.unwrap(), QueueFlags::TRANSFER)];
+        let mut queue_indices = vec![
+            (graphics_queue.unwrap(), QueueFlags::GRAPHICS),
+            (compute_queue.unwrap(), QueueFlags::COMPUTE),
+            (transfer_queue.unwrap(), QueueFlags::TRANSFER),
+        ];
 
         if spawn_window {
-            queue_indices.push(
-                (presentation_queue.unwrap(), QueueFlags::GRAPHICS)
-            );
+            queue_indices
+                .push((presentation_queue.unwrap(), QueueFlags::GRAPHICS));
         }
 
         let mut queue_info: Vec<QueueCreateInfo> = Vec::new();
         for i in &queue_indices {
-            queue_info.push(
-                QueueCreateInfo {
-                    queue_family_index: i.0,
-                    ..Default::default()
-                });
+            queue_info.push(QueueCreateInfo {
+                queue_family_index: i.0,
+                ..Default::default()
+            });
         }
 
         println!(
             "Using: {} {:?}",
             physical_device.properties().device_name,
             physical_device.properties().device_type,
-            );
+        );
 
-        let (device, queues_iter) = Device::new(physical_device.clone(), DeviceCreateInfo {
-            enabled_extensions: device_extensions,
-            queue_create_infos: queue_info,
-            ..Default::default()
-        }).unwrap();
+        let (device, queues_iter) = Device::new(
+            physical_device.clone(),
+            DeviceCreateInfo {
+                enabled_extensions: device_extensions,
+                queue_create_infos: queue_info,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let queues = Vec::from_iter(queues_iter.into_iter());
 
         let memory_alloc = StandardMemoryAllocator::new_default(device.clone());
 
-        let command_buff_allocator = 
-        StandardCommandBufferAllocator::new(
-            device.clone(), Default::default()
+        let command_buff_allocator = StandardCommandBufferAllocator::new(
+            device.clone(),
+            Default::default(),
         );
 
         let descriptor_allocator =
@@ -237,7 +249,7 @@ impl GPUInstance {
                 .physical_device()
                 .surface_capabilities(&surface.clone(), Default::default())
                 .unwrap();
-            
+
             let surface_format = Some(
                 device
                     .physical_device()
@@ -245,12 +257,12 @@ impl GPUInstance {
                     .unwrap()[0]
                     .0,
             );
-            let window = surface.object()
-                .unwrap().downcast_ref::<Window>().unwrap();
+            let window =
+                surface.object().unwrap().downcast_ref::<Window>().unwrap();
 
             let (swapchain, swapchain_images) = Swapchain::new(
-                device.clone(), 
-                surface.clone(), 
+                device.clone(),
+                surface.clone(),
                 SwapchainCreateInfo {
                     min_image_count: surface_capabilities.min_image_count,
                     image_format: surface_format,
@@ -263,8 +275,9 @@ impl GPUInstance {
                         .unwrap(),
 
                     ..Default::default()
-                }
-            ).unwrap();
+                },
+            )
+            .unwrap();
 
             let mut viewport = Viewport {
                 origin: [0.0, 0.0],
@@ -272,13 +285,13 @@ impl GPUInstance {
                 depth_range: 0.0..1.0,
             };
 
-            let gui_renderpass = Self::create_gui_renderpass(
-                device.clone(),
-                swapchain.clone()
-            );
+            let gui_renderpass =
+                Self::create_gui_renderpass(device.clone(), swapchain.clone());
 
             let gui_framebuffers = Self::create_gui_framebuffers(
-                &swapchain_images, &gui_renderpass, &mut viewport
+                &swapchain_images,
+                &gui_renderpass,
+                &mut viewport,
             );
 
             Some(GuiResources {
@@ -287,35 +300,35 @@ impl GPUInstance {
                 swapchain,
                 swapchain_images,
                 gui_renderpass,
-                gui_framebuffers
+                gui_framebuffers,
             })
         } else {
             None
         };
 
-        return Ok((GPUInstance { 
-            library,
-            instance,
-            instance_extensions: required_instance_extensions,
-            device_extensions,
-            physical_device,
-            device,
-            queue_family_indices: queue_indices,
-            queues,
-            standard_mem_alloc: memory_alloc,
-            command_buff_allocator,
-            descriptor_allocator
-        },
+        return Ok((
+            GPUInstance {
+                library,
+                instance,
+                instance_extensions: required_instance_extensions,
+                device_extensions,
+                physical_device,
+                device,
+                queue_family_indices: queue_indices,
+                queues,
+                standard_mem_alloc: memory_alloc,
+                command_buff_allocator,
+                descriptor_allocator,
+            },
             event_loop,
-            gui_resources)
-        );
-
+            gui_resources,
+        ));
     }
 
     // Creates renderpass for demo UI
     fn create_gui_renderpass(
         device: Arc<Device>,
-        swapchain: Arc<Swapchain>
+        swapchain: Arc<Swapchain>,
     ) -> Arc<RenderPass> {
         return vulkano::single_pass_renderpass!(
             device.clone(),
@@ -331,13 +344,14 @@ impl GPUInstance {
                 color: [color],
                 depth_stencil: {},
             },
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     pub fn create_gui_framebuffers(
         images: &[Arc<SwapchainImage>],
         render_pass: &Arc<RenderPass>,
-        viewport: &mut Viewport
+        viewport: &mut Viewport,
     ) -> Vec<Arc<Framebuffer>> {
         let dimensions = images.first().unwrap().swapchain().image_extent();
 
@@ -354,18 +368,16 @@ impl GPUInstance {
                         ..Default::default()
                     },
                 )
-                    .unwrap()
+                .unwrap()
             })
             .collect::<Vec<Arc<Framebuffer>>>()
     }
 
-    pub fn gather_layouts(scene: &SceneContents, 
-        desc_alloc: &StandardDescriptorSetAllocator) {
-        let layout = scene.pipelines[0]
-            .layout()
-            .set_layouts()
-            .get(0)
-            .unwrap();
+    pub fn gather_layouts(
+        scene: &SceneContents,
+        desc_alloc: &StandardDescriptorSetAllocator,
+    ) {
+        let layout = scene.pipelines[0].layout().set_layouts().get(0).unwrap();
 
         /*let desc_set = PersistentDescriptorSet::new(
             desc_alloc,
@@ -374,10 +386,14 @@ impl GPUInstance {
         );*/
     }
 
-    pub fn create_gui_mesh_pipeline(&self, gui_resources: &GuiResources)
-    -> Arc<GraphicsPipeline> {
-        let v_shader = shaders::gui_mesh_vert::load(self.device.clone()).unwrap();
-        let f_shader = shaders::gui_mesh_frag::load(self.device.clone()).unwrap();
+    pub fn create_gui_mesh_pipeline(
+        &self,
+        gui_resources: &GuiResources,
+    ) -> Arc<GraphicsPipeline> {
+        let v_shader =
+            shaders::gui_mesh_vert::load(self.device.clone()).unwrap();
+        let f_shader =
+            shaders::gui_mesh_frag::load(self.device.clone()).unwrap();
 
         let gui_renderpass = gui_resources.gui_renderpass.clone();
         let subpass = Subpass::from(gui_renderpass, 0).unwrap();
@@ -389,7 +405,7 @@ impl GPUInstance {
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
             .fragment_shader(f_shader.entry_point("main").unwrap(), ())
             .build(self.device.clone())
-            .expect("failed to create gui pipeline!")
+            .expect("failed to create gui pipeline!");
     }
 }
 pub enum MeshType {
@@ -398,11 +414,10 @@ pub enum MeshType {
     ObstacleMesh,
 }
 
-
 pub struct MeshModel {
     pub vbo_contents: Vec<ModelVertex>,
     pub mesh_type: MeshType,
-    pub bounds: [f32; 6]
+    pub bounds: [f32; 6],
 }
 
 pub struct PipelineDependencies {
@@ -414,114 +429,6 @@ pub struct SceneContents {
     pub pipelines: Vec<Arc<GraphicsPipeline>>,
     pub mesh_pipe_indices: Vec<usize>,
 }
-
-pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
-    event_loop: EventLoop<()>,
-    mut gui_resources: GuiResources,
-    scene: SceneContents
-) {
-    let gfx_queue_indice = gpu_instance.queue_family_indices[0];
-    assert!(gfx_queue_indice.1 == QueueFlags::GRAPHICS);
-    let graphics_queue = gpu_instance.queues[gfx_queue_indice.0 as usize].clone();
-
-    let command_buffer_allocater = StandardCommandBufferAllocator::new(
-        gpu_instance.device.clone(),
-        Default::default(),
-    );
-
-    let mut recreate_swapchain = false;
-    let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()));
-    event_loop.run(move |event, _, control_flow| {
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                    *control_flow = ControlFlow::Exit;
-                }
-            Event::WindowEvent {
-                event: WindowEvent::Resized(_),
-                ..
-            } => {
-                    recreate_swapchain = true;
-                }
-            Event::RedrawEventsCleared => {
-                let window = gui_resources.surface
-                    .object().unwrap().downcast_ref::<Window>().unwrap();
-
-                let dimensions = window.inner_size();
-                if dimensions.width == 0 || dimensions.height == 0 {
-                    return;
-                }
-
-                previous_frame_end.as_mut().unwrap().cleanup_finished();
-
-                if recreate_swapchain {
-                    let (new_swapchain, new_images) =
-                    match gui_resources.swapchain.recreate(SwapchainCreateInfo {
-                        image_extent: dimensions.into(),
-                        ..gui_resources.swapchain.create_info()
-                    }) {
-                            Ok(r) => r,
-                            Err(SwapchainCreationError::ImageExtentNotSupported { .. }) => return,
-                            Err(e) => panic!("failed to recreate swapchain: {e}"),
-                    };
-
-                    gui_resources.swapchain = new_swapchain;
-                    gui_resources.swapchain_images = new_images.clone();
-                    gui_resources.gui_framebuffers = GPUInstance::create_gui_framebuffers(
-                        &new_images, 
-                        &gui_resources.gui_renderpass, 
-                        &mut gui_resources.viewport
-                    );
-
-                    recreate_swapchain = false;
-                }
-
-                let (image_index, suboptimal, acquire_future) =
-                    match acquire_next_image(gui_resources.swapchain.clone(), None) {
-                    Ok(r) => r,
-                    Err(AcquireError::OutOfDate) => {
-                        recreate_swapchain = true;
-                        return;
-                    }
-                    Err(e) => panic!("failed to acquire next image: {e}"),
-                };
-
-                if suboptimal {
-                    recreate_swapchain = true;
-                }
-
-                let mut builder = AutoCommandBufferBuilder::primary(
-                    &command_buffer_allocater,
-                    graphics_queue.queue_family_index(),
-                    CommandBufferUsage::OneTimeSubmit,
-                )
-                    .expect("failed to create command buffer builder");
-
-                builder
-                    .begin_render_pass(
-                        RenderPassBeginInfo {
-                            clear_values: vec![Some([0.1, 0.1, 0.1, 1.0].into())],
-                            ..RenderPassBeginInfo::framebuffer(
-                                gui_resources.gui_framebuffers[image_index as usize].clone(),
-                            )
-                        },
-                        SubpassContents::Inline,
-                    )
-                    .unwrap()
-                    .set_viewport(0, [gui_resources.viewport.clone()])
-                    .bind_pipeline_graphics(scene.pipelines[0].clone());
-                
-                    //.bind_vertex_buffers(0, );
-                    //TODO: Need to create vertex buffer GPU side
-            }
-            _ => todo!()
-        }
-    });
-}
-
-
 
 /*pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
     let v_lib = VulkanLibrary::new().unwrap();
@@ -604,12 +511,12 @@ pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
     println!("Ortho Matrix: {}", ortho_matrix);
 
     let ortho_uniform_buffer = CpuAccessibleBuffer::from_data(
-        &allocator, 
+        &allocator,
         BufferUsage {
             uniform_buffer: true,
             ..Default::default()
-        }, 
-        false, 
+        },
+        false,
         ortho_matrix
     )
     .expect("Failed to create ortho matrix buffer");
@@ -816,7 +723,10 @@ pub fn run_gui_loop(gpu_instance: Arc<GPUInstance>,
 
 }*/
 
-pub fn import_verts(mesh: &russimp::mesh::Mesh, color: Vector3<f32>) -> (Vec<ModelVertex>, [f32; 6]) {
+pub fn import_verts(
+    mesh: &russimp::mesh::Mesh,
+    color: Vector3<f32>,
+) -> (Vec<ModelVertex>, [f32; 6]) {
     let vertices = mesh.vertices.iter();
     let first_vert = mesh.vertices.first().expect("No Vertices Found in Mesh");
 
@@ -895,7 +805,7 @@ pub fn find_rectangle_points(
     Matrix2x4::from_columns(&points)
 }
 
-// Learned math from 
+// Learned math from
 // https://github.com/PacktPublishing/Vulkan-Cookbook/blob/master/Library/Source%20Files/10%20Helper%20Recipes/05%20Preparing%20an%20orthographic%20projection%20matrix.cpp
 fn generate_ortho_matrix(
     left_plane: f32,
@@ -903,28 +813,25 @@ fn generate_ortho_matrix(
     bottom_plane: f32,
     top_plane: f32,
     near_plane: f32,
-    far_plane: f32
+    far_plane: f32,
 ) -> nalgebra::Matrix4<f32> {
     let ortho_matrix = nalgebra::Matrix4::new(
         2.0 / (right_plane - left_plane),
         0.0,
         0.0,
         0.0,
-
         0.0,
         2.0 / (bottom_plane - top_plane),
         0.0,
         0.0,
-
         0.0,
         0.0,
         1.0 / (near_plane - far_plane),
         0.0,
-
         -(right_plane + left_plane) / (right_plane - left_plane),
         -(bottom_plane + top_plane) / (bottom_plane - top_plane),
         near_plane / (near_plane - far_plane),
-        1.0
+        1.0,
     );
 
     return ortho_matrix.transpose();

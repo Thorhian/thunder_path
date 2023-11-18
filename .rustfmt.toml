@@ -1,0 +1,3 @@
+newline_style = "unix"
+imports_granularity = "Module"
+max_width = 80

@@ -142,7 +142,7 @@ fn main() {
             mesh_pipe_indices
         };
 
-        gpu::run_gui_loop(
+        gpu::window::run_gui_loop(
             gpu_instance.clone(), event_loop, gui_resources, scene
         );
     }
