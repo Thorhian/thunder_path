@@ -4,8 +4,21 @@ pub mod window;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use nalgebra::Vector3;
+use std::collections::HashMap;
 use std::println;
 use std::sync::Arc;
+use vulkano::image::Image;
+use vulkano::pipeline::graphics::color_blend::ColorBlendAttachmentState;
+use vulkano::pipeline::graphics::color_blend::ColorBlendState;
+use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
+use vulkano::pipeline::graphics::multisample::MultisampleState;
+use vulkano::pipeline::graphics::rasterization::RasterizationState;
+use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
+use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::DynamicState;
+use vulkano::pipeline::PipelineLayout;
+use vulkano::pipeline::PipelineShaderStageCreateInfo;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
 use winit::window::WindowBuilder;
@@ -27,14 +40,14 @@ use vulkano::{
     },
     //descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
     image::view::ImageView,
-    image::{ImageUsage, SwapchainImage},
+    image::ImageUsage,
     instance::InstanceExtensions,
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::FreeListAllocator,
     memory::allocator::GenericMemoryAllocator,
     memory::allocator::StandardMemoryAllocator,
     //pipeline::graphics::depth_stencil::DepthStencilState,
-    pipeline::graphics::input_assembly::InputAssemblyState,
+    //pipeline::graphics::input_assembly::InputAssemblyState,
     pipeline::graphics::vertex_input::Vertex,
     pipeline::graphics::viewport::{Viewport, ViewportState},
     pipeline::{GraphicsPipeline, Pipeline},
@@ -70,7 +83,7 @@ pub struct GuiResources {
     surface: Arc<Surface>,
     viewport: Viewport,
     swapchain: Arc<Swapchain>,
-    swapchain_images: Vec<Arc<SwapchainImage>>,
+    swapchain_images: Vec<Arc<Image>>,
     gui_renderpass: Arc<RenderPass>,
     gui_framebuffers: Vec<Arc<Framebuffer>>,
 }
@@ -82,9 +95,9 @@ pub struct GPUInstance {
     device_extensions: DeviceExtensions,
     physical_device: Arc<PhysicalDevice>,
     pub device: Arc<Device>,
-    pub queue_family_indices: Vec<(u32, QueueFlags)>,
+    pub queue_family_indices: HashMap<u32, QueueFlags>,
     pub queues: Vec<Arc<Queue>>,
-    pub standard_mem_alloc: GenericMemoryAllocator<Arc<FreeListAllocator>>,
+    pub standard_mem_alloc: Arc<GenericMemoryAllocator<FreeListAllocator>>,
     pub command_buff_allocator: StandardCommandBufferAllocator,
     pub descriptor_allocator: StandardDescriptorSetAllocator,
 }
@@ -96,13 +109,24 @@ impl GPUInstance {
         (GPUInstance, Option<EventLoop<()>>, Option<GuiResources>),
         LoadingError,
     > {
+        //Get The Vulkan Library
         let library = match VulkanLibrary::new() {
             Ok(library) => library,
             Err(error) => return Err(error),
         };
 
-        let required_instance_extensions =
-            vulkano_win::required_extensions(&library.clone());
+        //If we are using the Gui, get the event loop
+        let event_loop: Option<EventLoop<()>> = if spawn_window {
+            Some(EventLoop::new())
+        } else {
+            None
+        };
+
+        let mut required_instance_extensions = InstanceExtensions {
+            ..Default::default()
+        };
+        println!("Default Extensions: {:#?}", required_instance_extensions);
+
         let instance_create_info = InstanceCreateInfo {
             application_name: Some(String::from("Thunder Path")),
             enabled_extensions: required_instance_extensions,
@@ -111,12 +135,6 @@ impl GPUInstance {
 
         let instance =
             Instance::new(library.clone(), instance_create_info).unwrap();
-
-        let event_loop: Option<EventLoop<()>> = if spawn_window {
-            Some(EventLoop::new())
-        } else {
-            None
-        };
 
         let available_devices = instance.enumerate_physical_devices().unwrap();
 
@@ -141,21 +159,22 @@ impl GPUInstance {
         let mut transfer_queue: Option<u32> = None;
         let mut chosen_physical_device: Option<Arc<PhysicalDevice>> = None;
         for physical_device in available_devices {
-            let queues = physical_device.queue_family_properties();
+            let queue_fams = physical_device.queue_family_properties();
             if !physical_device
                 .supported_extensions()
                 .contains(&device_extensions)
             {
                 continue;
             }
-            for (i, queue) in queues.iter().enumerate() {
-                if queue.queue_flags.intersects(QueueFlags::GRAPHICS) {
+            println!("Queue Family: {:#?}", queue_fams);
+            for (i, queue_fam) in queue_fams.iter().enumerate() {
+                if queue_fam.queue_flags.intersects(QueueFlags::GRAPHICS) {
                     graphics_queue = Some(i as u32);
                 }
-                if queue.queue_flags.intersects(QueueFlags::COMPUTE) {
+                if queue_fam.queue_flags.intersects(QueueFlags::COMPUTE) {
                     compute_queue = Some(i as u32);
                 }
-                if queue.queue_flags.intersects(QueueFlags::TRANSFER) {
+                if queue_fam.queue_flags.intersects(QueueFlags::TRANSFER) {
                     transfer_queue = Some(i as u32);
                 }
                 if spawn_window
@@ -199,13 +218,25 @@ impl GPUInstance {
                 .push((presentation_queue.unwrap(), QueueFlags::GRAPHICS));
         }
 
+        let mut queue_fam_indices: HashMap<u32, QueueFlags> = HashMap::new();
+        for pair in queue_indices {
+            match queue_fam_indices.get(&pair.0) {
+                Some(old_type) => {
+                    queue_fam_indices.insert(pair.0, pair.1.union(*old_type))
+                }
+                None => queue_fam_indices.insert(pair.0, pair.1),
+            };
+        }
+
         let mut queue_info: Vec<QueueCreateInfo> = Vec::new();
-        for i in &queue_indices {
+        for (i, _) in queue_fam_indices {
             queue_info.push(QueueCreateInfo {
-                queue_family_index: i.0,
+                queue_family_index: i,
                 ..Default::default()
             });
         }
+
+        println!("Queue Creation Info Structs: {:#?}", queue_info);
 
         println!(
             "Using: {} {:?}",
@@ -225,15 +256,18 @@ impl GPUInstance {
 
         let queues = Vec::from_iter(queues_iter.into_iter());
 
-        let memory_alloc = StandardMemoryAllocator::new_default(device.clone());
+        let memory_alloc =
+            Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
         let command_buff_allocator = StandardCommandBufferAllocator::new(
             device.clone(),
             Default::default(),
         );
 
-        let descriptor_allocator =
-            StandardDescriptorSetAllocator::new(device.clone());
+        let descriptor_allocator = StandardDescriptorSetAllocator::new(
+            device.clone(),
+            Default::default(),
+        );
 
         let event_loop = if spawn_window {
             Some(EventLoop::new())
@@ -250,13 +284,12 @@ impl GPUInstance {
                 .surface_capabilities(&surface.clone(), Default::default())
                 .unwrap();
 
-            let surface_format = Some(
-                device
-                    .physical_device()
-                    .surface_formats(&surface.clone(), Default::default())
-                    .unwrap()[0]
-                    .0,
-            );
+            let surface_format = device
+                .physical_device()
+                .surface_formats(&surface.clone(), Default::default())
+                .unwrap()[0]
+                .0;
+
             let window =
                 surface.object().unwrap().downcast_ref::<Window>().unwrap();
 
@@ -280,9 +313,9 @@ impl GPUInstance {
             .unwrap();
 
             let mut viewport = Viewport {
-                origin: [0.0, 0.0],
-                dimensions: [0.0, 0.0],
-                depth_range: 0.0..1.0,
+                offset: [0.0, 0.0],
+                extent: [0.0, 0.0],
+                depth_range: 0.0..=1.0,
             };
 
             let gui_renderpass =
@@ -314,7 +347,7 @@ impl GPUInstance {
                 device_extensions,
                 physical_device,
                 device,
-                queue_family_indices: queue_indices,
+                queue_family_indices: queue_fam_indices,
                 queues,
                 standard_mem_alloc: memory_alloc,
                 command_buff_allocator,
@@ -331,13 +364,13 @@ impl GPUInstance {
         swapchain: Arc<Swapchain>,
     ) -> Arc<RenderPass> {
         return vulkano::single_pass_renderpass!(
-            device.clone(),
-            attachments: {
+        device.clone(),
+        attachments: {
                 color: {
-                load: Clear,
-                store: Store,
-                format: swapchain.image_format(),
-                samples: 1,
+                    format: swapchain.image_format(),
+                    samples: 1,
+                    load_op: Clear,
+                    store_op: Store,
             },
         },
             pass: {
@@ -349,13 +382,13 @@ impl GPUInstance {
     }
 
     pub fn create_gui_framebuffers(
-        images: &[Arc<SwapchainImage>],
+        images: &[Arc<Image>],
         render_pass: &Arc<RenderPass>,
         viewport: &mut Viewport,
     ) -> Vec<Arc<Framebuffer>> {
-        let dimensions = images.first().unwrap().swapchain().image_extent();
+        let extent = images.first().unwrap().extent();
 
-        viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
+        viewport.extent = [extent[0] as f32, extent[1] as f32];
 
         images
             .iter()
@@ -390,22 +423,64 @@ impl GPUInstance {
         &self,
         gui_resources: &GuiResources,
     ) -> Arc<GraphicsPipeline> {
-        let v_shader =
-            shaders::gui_mesh_vert::load(self.device.clone()).unwrap();
-        let f_shader =
-            shaders::gui_mesh_frag::load(self.device.clone()).unwrap();
+        // TODO: Will need to redo layout stuff here
+        let pipeline = {
+            let v_shader = shaders::gui_mesh_vert::load(self.device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let f_shader = shaders::gui_mesh_frag::load(self.device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
 
-        let gui_renderpass = gui_resources.gui_renderpass.clone();
-        let subpass = Subpass::from(gui_renderpass, 0).unwrap();
-        return GraphicsPipeline::start()
-            .render_pass(subpass)
-            .vertex_input_state(ModelVertex::per_vertex())
-            .input_assembly_state(InputAssemblyState::new())
-            .vertex_shader(v_shader.entry_point("main").unwrap(), ())
-            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(f_shader.entry_point("main").unwrap(), ())
-            .build(self.device.clone())
-            .expect("failed to create gui pipeline!");
+            let vertex_input_state = ModelVertex::per_vertex()
+                .definition(&v_shader.info().input_interface)
+                .unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(v_shader),
+                PipelineShaderStageCreateInfo::new(f_shader),
+            ];
+
+            let test_layout = PipelineLayout::new(
+                self.device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(self.device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            let gui_renderpass = gui_resources.gui_renderpass.clone();
+            let subpass = Subpass::from(gui_renderpass, 0).unwrap();
+
+            GraphicsPipeline::new(
+                self.device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState::default()),
+                    rasterization_state: Some(RasterizationState::default()),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(
+                        ColorBlendState::with_attachment_states(
+                            subpass.num_color_attachments(),
+                            ColorBlendAttachmentState::default(),
+                        ),
+                    ),
+                    dynamic_state: [DynamicState::Viewport]
+                        .into_iter()
+                        .collect(),
+                    subpass: Some(subpass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(test_layout)
+                },
+            )
+            .unwrap()
+        };
+        //End Creation of pipeline
+        return pipeline;
     }
 }
 pub enum MeshType {
