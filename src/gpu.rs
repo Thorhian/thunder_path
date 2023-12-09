@@ -4,6 +4,8 @@ pub mod window;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use nalgebra::Vector3;
+use vulkano::device::QueueCreateFlags;
+use vulkano::device::QueueFamilyProperties;
 use std::collections::HashMap;
 use std::println;
 use std::sync::Arc;
@@ -157,17 +159,22 @@ impl GPUInstance {
         let mut presentation_queue: Option<u32> = None;
         let mut compute_queue: Option<u32> = None;
         let mut transfer_queue: Option<u32> = None;
+        let mut queue_fams: Vec<QueueFamilyProperties>;
         let mut chosen_physical_device: Option<Arc<PhysicalDevice>> = None;
         for physical_device in available_devices {
-            let queue_fams = physical_device.queue_family_properties();
+            let current_que_fams = physical_device.queue_family_properties();
             if !physical_device
                 .supported_extensions()
                 .contains(&device_extensions)
             {
                 continue;
             }
-            println!("Queue Family: {:#?}", queue_fams);
-            for (i, queue_fam) in queue_fams.iter().enumerate() {
+            println!("Queue Family: {:#?}", current_que_fams);
+
+            let queue_flags_found = QueueFlags::empty();
+            println!("Empty QueueFlag: {:#?}", queue_flags_found);
+
+            for (i, queue_fam) in current_que_fams.iter().enumerate() {
                 if queue_fam.queue_flags.intersects(QueueFlags::GRAPHICS) {
                     graphics_queue = Some(i as u32);
                 }
@@ -195,6 +202,7 @@ impl GPUInstance {
                 && transfer_queue.is_some()
             {
                 chosen_physical_device = Some(physical_device);
+                queue_fams = current_que_fams.to_vec();
                 break;
             } else {
                 graphics_queue = None;
@@ -228,15 +236,15 @@ impl GPUInstance {
             };
         }
 
-        let mut queue_info: Vec<QueueCreateInfo> = Vec::new();
-        for (i, _) in queue_fam_indices {
-            queue_info.push(QueueCreateInfo {
-                queue_family_index: i,
+        let mut queue_create_info: Vec<QueueCreateInfo> = Vec::new();
+        for (i, &fam) in queue_fams.iter().enumerate() {
+            queue_create_info.push(QueueCreateInfo {
+                queue_family_index: u32::try_from(i).unwrap(),
                 ..Default::default()
             });
         }
 
-        println!("Queue Creation Info Structs: {:#?}", queue_info);
+        println!("Queue Creation Info Structs: {:#?}", queue_create_info);
 
         println!(
             "Using: {} {:?}",
@@ -248,7 +256,7 @@ impl GPUInstance {
             physical_device.clone(),
             DeviceCreateInfo {
                 enabled_extensions: device_extensions,
-                queue_create_infos: queue_info,
+                queue_create_infos: queue_create_info,
                 ..Default::default()
             },
         )
