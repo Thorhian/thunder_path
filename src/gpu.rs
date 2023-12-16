@@ -4,11 +4,11 @@ pub mod window;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use nalgebra::Vector3;
-use vulkano::device::QueueCreateFlags;
-use vulkano::device::QueueFamilyProperties;
 use std::collections::HashMap;
 use std::println;
 use std::sync::Arc;
+use vulkano::device::QueueCreateFlags;
+use vulkano::device::QueueFamilyProperties;
 use vulkano::image::Image;
 use vulkano::pipeline::graphics::color_blend::ColorBlendAttachmentState;
 use vulkano::pipeline::graphics::color_blend::ColorBlendState;
@@ -21,6 +21,7 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::DynamicState;
 use vulkano::pipeline::PipelineLayout;
 use vulkano::pipeline::PipelineShaderStageCreateInfo;
+use vulkano::Version;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
 use winit::window::WindowBuilder;
@@ -138,8 +139,6 @@ impl GPUInstance {
         let instance =
             Instance::new(library.clone(), instance_create_info).unwrap();
 
-        let available_devices = instance.enumerate_physical_devices().unwrap();
-
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
             ..DeviceExtensions::empty()
@@ -155,13 +154,52 @@ impl GPUInstance {
             None
         };
 
+        let available_devices = instance.enumerate_physical_devices().unwrap();
         let mut graphics_queue: Option<u32> = None;
         let mut presentation_queue: Option<u32> = None;
         let mut compute_queue: Option<u32> = None;
         let mut transfer_queue: Option<u32> = None;
         let mut queue_fams: Vec<QueueFamilyProperties>;
         let mut chosen_physical_device: Option<Arc<PhysicalDevice>> = None;
-        for physical_device in available_devices {
+        available_devices
+            .filter(|device| {
+                device.api_version() >= Version::V1_3
+                    || device.supported_extensions().khr_dynamic_rendering
+            })
+            .filter(|device| {
+                device.supported_extensions().contains(device_extensions)
+            })
+            .filter_map(|device| {
+                let current_queue_fams = device.queue_family_properties();
+                for (i, family) in current_queue_fams.iter().enumerate() {
+                    if family.queue_flags.intersects(QueueFlags::GRAPHICS) {
+                        graphics_queue = Some(i as u32);
+                    }
+                    if family.queue_flags.intersects(QueueFlags::COMPUTE) {
+                        compute_queue = Some(i as u32);
+                    }
+                    if family.queue_flags.intersects(QueueFlags::TRANSFER) {
+                        transfer_queue = Some(i as u32);
+                    }
+                    if spawn_window
+                        && physical_device
+                            .surface_support(
+                                i as u32,
+                                &surface.as_ref().unwrap().clone(),
+                            )
+                            .unwrap_or(false)
+                    {
+                        presentation_queue = Some(i as u32);
+                    }
+                }
+
+                if graphics_queue.is_some()
+                    && (presentation_queue.is_some() || !spawn_window)
+                    && compute_queue.is_some()
+                    && transfer_queue.is_some()
+                {}
+            });
+        /*for physical_device in available_devices {
             let current_que_fams = physical_device.queue_family_properties();
             if !physical_device
                 .supported_extensions()
@@ -210,7 +248,7 @@ impl GPUInstance {
                 compute_queue = None;
                 transfer_queue = None;
             }
-        }
+        }*/
 
         let physical_device =
             chosen_physical_device.expect("no suitable physical device found");
