@@ -4,10 +4,9 @@ pub mod window;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use nalgebra::Vector3;
-use std::collections::HashMap;
 use std::println;
 use std::sync::Arc;
-use vulkano::device::QueueCreateFlags;
+use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::QueueFamilyProperties;
 use vulkano::image::Image;
 use vulkano::pipeline::graphics::color_blend::ColorBlendAttachmentState;
@@ -92,13 +91,12 @@ pub struct GuiResources {
 }
 
 pub struct GPUInstance {
-    library: Arc<VulkanLibrary>,
+    pub library: Arc<VulkanLibrary>,
     pub instance: Arc<Instance>,
-    instance_extensions: InstanceExtensions,
-    device_extensions: DeviceExtensions,
-    physical_device: Arc<PhysicalDevice>,
+    pub instance_extensions: InstanceExtensions,
+    pub device_extensions: DeviceExtensions,
+    pub physical_device: Arc<PhysicalDevice>,
     pub device: Arc<Device>,
-    pub queue_family_indices: HashMap<u32, QueueFlags>,
     pub queues: Vec<Arc<Queue>>,
     pub standard_mem_alloc: Arc<GenericMemoryAllocator<FreeListAllocator>>,
     pub command_buff_allocator: StandardCommandBufferAllocator,
@@ -155,124 +153,68 @@ impl GPUInstance {
         };
 
         let available_devices = instance.enumerate_physical_devices().unwrap();
-        let mut graphics_queue: Option<u32> = None;
-        let mut presentation_queue: Option<u32> = None;
-        let mut compute_queue: Option<u32> = None;
-        let mut transfer_queue: Option<u32> = None;
-        let mut queue_fams: Vec<QueueFamilyProperties>;
-        let mut chosen_physical_device: Option<Arc<PhysicalDevice>> = None;
-        available_devices
+        let (chosen_device, queue_fams) = available_devices
             .filter(|device| {
                 device.api_version() >= Version::V1_3
                     || device.supported_extensions().khr_dynamic_rendering
             })
             .filter(|device| {
-                device.supported_extensions().contains(device_extensions)
+                device.supported_extensions().contains(&device_extensions)
             })
             .filter_map(|device| {
-                let current_queue_fams = device.queue_family_properties();
-                for (i, family) in current_queue_fams.iter().enumerate() {
-                    if family.queue_flags.intersects(QueueFlags::GRAPHICS) {
-                        graphics_queue = Some(i as u32);
-                    }
-                    if family.queue_flags.intersects(QueueFlags::COMPUTE) {
-                        compute_queue = Some(i as u32);
-                    }
-                    if family.queue_flags.intersects(QueueFlags::TRANSFER) {
-                        transfer_queue = Some(i as u32);
-                    }
-                    if spawn_window
-                        && physical_device
-                            .surface_support(
-                                i as u32,
-                                &surface.as_ref().unwrap().clone(),
-                            )
-                            .unwrap_or(false)
-                    {
-                        presentation_queue = Some(i as u32);
-                    }
+                let queue_fams = device.queue_family_properties();
+                let fams_iter = queue_fams.iter();
+
+                //Check if we have a graphics queue and surface support if
+                //rendering to screen (application should run either way)
+                let graphics = fams_iter
+                    .enumerate()
+                    .position(|(i, fam)| {
+                        if !spawn_window {
+                            fam.queue_flags.contains(QueueFlags::GRAPHICS)
+                        } else {
+                            fam.queue_flags.contains(QueueFlags::GRAPHICS)
+                                && device
+                                    .surface_support(
+                                        i as u32,
+                                        &surface.as_ref().unwrap().clone(),
+                                    )
+                                    .unwrap_or(false)
+                        }
+                    })
+                    .is_some();
+
+                //We need compute shaders
+                let compute = fams_iter
+                    .position(|fam| {
+                        fam.queue_flags.contains(QueueFlags::COMPUTE)
+                    })
+                    .is_some();
+
+                //We need to shuttle memory around between CPU and GPU
+                let transfer = fams_iter
+                    .position(|fam| {
+                        fam.queue_flags.contains(QueueFlags::TRANSFER)
+                    })
+                    .is_some();
+
+                if graphics && compute && transfer {
+                    Some((device, queue_fams))
+                } else {
+                    None::<(Arc<PhysicalDevice>, &[QueueFamilyProperties])>
                 }
-
-                if graphics_queue.is_some()
-                    && (presentation_queue.is_some() || !spawn_window)
-                    && compute_queue.is_some()
-                    && transfer_queue.is_some()
-                {}
-            });
-        /*for physical_device in available_devices {
-            let current_que_fams = physical_device.queue_family_properties();
-            if !physical_device
-                .supported_extensions()
-                .contains(&device_extensions)
-            {
-                continue;
-            }
-            println!("Queue Family: {:#?}", current_que_fams);
-
-            let queue_flags_found = QueueFlags::empty();
-            println!("Empty QueueFlag: {:#?}", queue_flags_found);
-
-            for (i, queue_fam) in current_que_fams.iter().enumerate() {
-                if queue_fam.queue_flags.intersects(QueueFlags::GRAPHICS) {
-                    graphics_queue = Some(i as u32);
+            })
+            .min_by_key(|(device, fams)| {
+                match device.properties().device_type {
+                    PhysicalDeviceType::DiscreteGpu => 0,
+                    PhysicalDeviceType::IntegratedGpu => 1,
+                    PhysicalDeviceType::VirtualGpu => 2,
+                    PhysicalDeviceType::Cpu => 3,
+                    PhysicalDeviceType::Other => 4,
+                    _ => 5,
                 }
-                if queue_fam.queue_flags.intersects(QueueFlags::COMPUTE) {
-                    compute_queue = Some(i as u32);
-                }
-                if queue_fam.queue_flags.intersects(QueueFlags::TRANSFER) {
-                    transfer_queue = Some(i as u32);
-                }
-                if spawn_window
-                    && physical_device
-                        .surface_support(
-                            i as u32,
-                            &surface.as_ref().unwrap().clone(),
-                        )
-                        .unwrap_or(false)
-                {
-                    presentation_queue = Some(i as u32);
-                }
-            }
-
-            if graphics_queue.is_some()
-                && (presentation_queue.is_some() || !spawn_window)
-                && compute_queue.is_some()
-                && transfer_queue.is_some()
-            {
-                chosen_physical_device = Some(physical_device);
-                queue_fams = current_que_fams.to_vec();
-                break;
-            } else {
-                graphics_queue = None;
-                presentation_queue = None;
-                compute_queue = None;
-                transfer_queue = None;
-            }
-        }*/
-
-        let physical_device =
-            chosen_physical_device.expect("no suitable physical device found");
-
-        let mut queue_indices = vec![
-            (graphics_queue.unwrap(), QueueFlags::GRAPHICS),
-            (compute_queue.unwrap(), QueueFlags::COMPUTE),
-            (transfer_queue.unwrap(), QueueFlags::TRANSFER),
-        ];
-
-        if spawn_window {
-            queue_indices
-                .push((presentation_queue.unwrap(), QueueFlags::GRAPHICS));
-        }
-
-        let mut queue_fam_indices: HashMap<u32, QueueFlags> = HashMap::new();
-        for pair in queue_indices {
-            match queue_fam_indices.get(&pair.0) {
-                Some(old_type) => {
-                    queue_fam_indices.insert(pair.0, pair.1.union(*old_type))
-                }
-                None => queue_fam_indices.insert(pair.0, pair.1),
-            };
-        }
+            })
+            .expect("no suitable physical device found");
 
         let mut queue_create_info: Vec<QueueCreateInfo> = Vec::new();
         for (i, &fam) in queue_fams.iter().enumerate() {
@@ -286,12 +228,12 @@ impl GPUInstance {
 
         println!(
             "Using: {} {:?}",
-            physical_device.properties().device_name,
-            physical_device.properties().device_type,
+            chosen_device.properties().device_name,
+            chosen_device.properties().device_type,
         );
 
         let (device, queues_iter) = Device::new(
-            physical_device.clone(),
+            chosen_device.clone(),
             DeviceCreateInfo {
                 enabled_extensions: device_extensions,
                 queue_create_infos: queue_create_info,
@@ -300,7 +242,7 @@ impl GPUInstance {
         )
         .unwrap();
 
-        let queues = Vec::from_iter(queues_iter.into_iter());
+        let queues: Vec<Arc<Queue>> = Vec::from_iter(queues_iter.into_iter());
 
         let memory_alloc =
             Arc::new(StandardMemoryAllocator::new_default(device.clone()));
@@ -391,9 +333,8 @@ impl GPUInstance {
                 instance,
                 instance_extensions: required_instance_extensions,
                 device_extensions,
-                physical_device,
+                physical_device: chosen_device,
                 device,
-                queue_family_indices: queue_fam_indices,
                 queues,
                 standard_mem_alloc: memory_alloc,
                 command_buff_allocator,

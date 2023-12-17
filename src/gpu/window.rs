@@ -6,11 +6,9 @@ use vulkano::{
         CommandBufferUsage, RenderPassBeginInfo, SubpassContents,
     },
     device::QueueFlags,
-    swapchain::{
-        acquire_next_image, AcquireError, SwapchainCreateInfo,
-        SwapchainCreationError,
-    },
+    swapchain::{acquire_next_image, SwapchainCreateInfo},
     sync::{self, GpuFuture},
+    Validated, VulkanError,
 };
 use winit::{
     event::{Event, WindowEvent},
@@ -28,10 +26,14 @@ pub fn run_gui_loop(
     mut gui_resources: GuiResources,
     scene: SceneContents,
 ) {
-    let gfx_queue_indice = gpu_instance.queue_family_indices[0];
-    assert!(gfx_queue_indice.1 == QueueFlags::GRAPHICS);
-    let graphics_queue =
-        gpu_instance.queues[gfx_queue_indice.0 as usize].clone();
+    let queue_index = gpu_instance
+        .physical_device
+        .queue_family_properties()
+        .iter()
+        .position(|fam| fam.queue_flags.contains(QueueFlags::GRAPHICS))
+        .unwrap();
+
+    let graphics_queue = gpu_instance.queues[queue_index as usize].clone();
 
     let command_buffer_allocater = StandardCommandBufferAllocator::new(
         gpu_instance.device.clone(),
@@ -70,20 +72,13 @@ pub fn run_gui_loop(
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
 
                 if recreate_swapchain {
-                    let (new_swapchain, new_images) = match gui_resources
+                    let (new_swapchain, new_images) = gui_resources
                         .swapchain
                         .recreate(SwapchainCreateInfo {
                             image_extent: dimensions.into(),
                             ..gui_resources.swapchain.create_info()
-                        }) {
-                        Ok(r) => r,
-                        Err(
-                            SwapchainCreationError::ImageExtentNotSupported {
-                                ..
-                            },
-                        ) => return,
-                        Err(e) => panic!("failed to recreate swapchain: {e}"),
-                    };
+                        })
+                        .expect("Failed to recreate swapchain");
 
                     gui_resources.swapchain = new_swapchain;
                     gui_resources.swapchain_images = new_images.clone();
@@ -101,9 +96,11 @@ pub fn run_gui_loop(
                     match acquire_next_image(
                         gui_resources.swapchain.clone(),
                         None,
-                    ) {
+                    )
+                    .map_err(Validated::unwrap)
+                    {
                         Ok(r) => r,
-                        Err(AcquireError::OutOfDate) => {
+                        Err(VulkanError::OutOfDate) => {
                             recreate_swapchain = true;
                             return;
                         }

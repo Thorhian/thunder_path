@@ -6,6 +6,7 @@ use gpu::PipelineDependencies;
 use nalgebra::Vector3;
 use russimp::scene;
 use russimp::scene::Scene;
+use vulkano::device::QueueFlags;
 use std::path::PathBuf;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
@@ -121,7 +122,13 @@ fn main() {
             )
             .unwrap();
 
-            let queue_index = gpu_instance.queue_family_indices[0].clone().0;
+            let queue_index = gpu_instance
+                .physical_device
+                .queue_family_properties()
+                .iter()
+                .position(|fam| fam.queue_flags.contains(QueueFlags::GRAPHICS))
+                .unwrap();
+
             let gfx_queue = &gpu_instance.queues[queue_index as usize];
 
             let mut cbb = AutoCommandBufferBuilder::primary(
