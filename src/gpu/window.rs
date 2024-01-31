@@ -3,9 +3,11 @@ use std::sync::Arc;
 use vulkano::{
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
-        CommandBufferUsage, RenderPassBeginInfo, SubpassContents,
+        CommandBufferUsage, RenderPassBeginInfo, RenderingAttachmentInfo,
+        RenderingInfo, SubpassContents,
     },
     device::QueueFlags,
+    render_pass,
     swapchain::{acquire_next_image, SwapchainCreateInfo},
     sync::{self, GpuFuture},
     Validated, VulkanError,
@@ -119,22 +121,34 @@ pub fn run_gui_loop(
                 .expect("failed to create command buffer builder");
 
                 builder
-                    .begin_render_pass(
-                        RenderPassBeginInfo {
-                            clear_values: vec![Some(
-                                [0.1, 0.1, 0.1, 1.0].into(),
-                            )],
-                            ..RenderPassBeginInfo::framebuffer(
-                                gui_resources.gui_framebuffers
-                                    [image_index as usize]
-                                    .clone(),
-                            )
-                        },
-                        SubpassContents::Inline,
-                    )
+                    .begin_rendering(RenderingInfo {
+                        color_attachments: vec![Some(
+                            RenderingAttachmentInfo {
+                                load_op: render_pass::AttachmentLoadOp::Clear,
+                                store_op: render_pass::AttachmentStoreOp::Store,
+                                clear_value: Some([0.0, 0.0, 0.0, 1.0].into()),
+                                // Get the current frame imageview
+                                ..RenderingAttachmentInfo::image_view(
+                                    gui_resources.gui_framebuffers
+                                        [image_index as usize]
+                                        .attachments()
+                                        .first()
+                                        .unwrap()
+                                        .clone(),
+                                )
+                            },
+                        )],
+                        ..Default::default()
+                    })
                     .unwrap()
-                    .set_viewport(0, [gui_resources.viewport.clone()])
-                    .bind_pipeline_graphics(scene.pipelines[0].clone());
+                    .set_viewport(
+                        0,
+                        [gui_resources.viewport.clone()].into_iter().collect(),
+                    )
+                    .unwrap();
+                    //.bind_pipeline_graphics()
+                //.set_viewport(0, [gui_resources.viewport.clone()])
+                //.bind_pipeline_graphics(scene.pipelines[0].clone());
 
                 //.bind_vertex_buffers(0, );
                 //TODO: Need to create vertex buffer GPU side
