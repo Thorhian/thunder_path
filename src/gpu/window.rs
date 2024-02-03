@@ -3,12 +3,12 @@ use std::sync::Arc;
 use vulkano::{
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
-        CommandBufferUsage, RenderPassBeginInfo, RenderingAttachmentInfo,
-        RenderingInfo, SubpassContents,
+        CommandBufferUsage, RenderingAttachmentInfo,
+        RenderingInfo
     },
     device::QueueFlags,
     render_pass,
-    swapchain::{acquire_next_image, SwapchainCreateInfo},
+    swapchain::{acquire_next_image, SwapchainCreateInfo, SwapchainPresentInfo},
     sync::{self, GpuFuture},
     Validated, VulkanError,
 };
@@ -24,7 +24,6 @@ use super::SceneContents;
 
 pub fn run_gui_loop(
     gpu_instance: Arc<GPUInstance>,
-    event_loop: EventLoop<()>,
     mut gui_resources: GuiResources,
     scene: SceneContents,
 ) {
@@ -42,8 +41,10 @@ pub fn run_gui_loop(
         Default::default(),
     );
 
+    let event_loop = gui_resources.event_loop;
+
     let mut recreate_swapchain = false;
-    let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()));
+    let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent {
@@ -120,6 +121,8 @@ pub fn run_gui_loop(
                 )
                 .expect("failed to create command buffer builder");
 
+                let model_vbo = scene.pipeline_dependencies[0].vbo.clone();
+
                 builder
                     .begin_rendering(RenderingInfo {
                         color_attachments: vec![Some(
@@ -145,15 +148,46 @@ pub fn run_gui_loop(
                         0,
                         [gui_resources.viewport.clone()].into_iter().collect(),
                     )
+                    .unwrap()
+                    .bind_pipeline_graphics(scene.pipelines[0].clone())
+                    .unwrap()
+                    .bind_vertex_buffers(0, model_vbo.clone())
+                    .unwrap()
+                    .draw(model_vbo.len() as u32, 1, 0, 0)
+                    .unwrap()
+                    .end_rendering()
                     .unwrap();
-                    //.bind_pipeline_graphics()
-                //.set_viewport(0, [gui_resources.viewport.clone()])
-                //.bind_pipeline_graphics(scene.pipelines[0].clone());
 
-                //.bind_vertex_buffers(0, );
-                //TODO: Need to create vertex buffer GPU side
+                let render_cmd_buf = builder.build().unwrap();
+
+                let future = previous_frame_end
+                    .take()
+                    .unwrap()
+                    .join(acquire_future)
+                    .then_execute(graphics_queue.clone(), render_cmd_buf)
+                    .unwrap()
+                    .then_swapchain_present(
+                        graphics_queue.clone(), 
+                        SwapchainPresentInfo::swapchain_image_index(
+                            gui_resources.swapchain.clone(), image_index)
+                    )
+                    .then_signal_fence_and_flush();
+
+                match future.map_err(Validated::unwrap) {
+                    Ok(future) => {
+                        previous_frame_end = Some(future.boxed());
+                    }
+                    Err(VulkanError::OutOfDate) => {
+                        recreate_swapchain = true;
+                        previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
+                    }
+                    Err(e) => {
+                        println!("failed to flush future: {e}");
+                        previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
+                    }
+                }
             }
-            _ => todo!(),
+            _ => (),
         }
     });
 }

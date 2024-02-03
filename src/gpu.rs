@@ -7,7 +7,6 @@ use nalgebra::Vector3;
 use std::println;
 use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
-use vulkano::device::QueueFamilyProperties;
 use vulkano::image::Image;
 use vulkano::pipeline::graphics::color_blend::ColorBlendAttachmentState;
 use vulkano::pipeline::graphics::color_blend::ColorBlendState;
@@ -43,8 +42,9 @@ use vulkano::{
     //descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
     image::view::ImageView,
     image::ImageUsage,
-    instance::InstanceExtensions,
-    instance::{Instance, InstanceCreateInfo},
+    instance::{
+        Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions,
+    },
     memory::allocator::FreeListAllocator,
     memory::allocator::GenericMemoryAllocator,
     memory::allocator::StandardMemoryAllocator,
@@ -56,10 +56,10 @@ use vulkano::{
     //render_pass,
     render_pass::RenderPass,
     render_pass::{Framebuffer, FramebufferCreateInfo, Subpass},
-    swapchain::Surface,
     swapchain::{
         //acquire_next_image,
         //AcquireError,
+        Surface,
         Swapchain,
         SwapchainCreateInfo,
         //SwapchainCreationError, //SwapchainPresentInfo
@@ -68,8 +68,6 @@ use vulkano::{
     LoadingError,
     VulkanLibrary,
 };
-
-use vulkano_win::VkSurfaceBuild;
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
@@ -82,12 +80,13 @@ pub struct ModelVertex {
 }
 
 pub struct GuiResources {
-    surface: Arc<Surface>,
-    viewport: Viewport,
-    swapchain: Arc<Swapchain>,
-    swapchain_images: Vec<Arc<Image>>,
-    gui_renderpass: Arc<RenderPass>,
-    gui_framebuffers: Vec<Arc<Framebuffer>>,
+    pub surface: Arc<Surface>,
+    pub event_loop: EventLoop<()>,
+    pub viewport: Viewport,
+    pub swapchain: Arc<Swapchain>,
+    pub swapchain_images: Vec<Arc<Image>>,
+    pub gui_renderpass: Arc<RenderPass>,
+    pub gui_framebuffers: Vec<Arc<Framebuffer>>,
 }
 
 pub struct GPUInstance {
@@ -107,7 +106,7 @@ impl GPUInstance {
     pub fn initialize_instance(
         spawn_window: bool,
     ) -> Result<
-        (GPUInstance, Option<EventLoop<()>>, Option<GuiResources>),
+        (GPUInstance, Option<GuiResources>),
         LoadingError,
     > {
         //Get The Vulkan Library
@@ -116,44 +115,50 @@ impl GPUInstance {
             Err(error) => return Err(error),
         };
 
-        //If we are using the Gui, get the event loop
-        let event_loop: Option<EventLoop<()>> = if spawn_window {
-            Some(EventLoop::new())
+        // If we are using the Gui, get the event loop and needed
+        // surface extensions
+        let (event_loop, required_inst_ext) = if spawn_window {
+            let event_loop = EventLoop::new();
+            let extensions = Surface::required_extensions(&event_loop);
+            (Some(event_loop), extensions)
         } else {
-            None
+            (
+                None,
+                InstanceExtensions {
+                    ..Default::default()
+                },
+            )
         };
 
-        let mut required_instance_extensions = InstanceExtensions {
-            ..Default::default()
-        };
-        println!("Default Extensions: {:#?}", required_instance_extensions);
+        println!("Default Extensions: {:#?}", required_inst_ext);
 
         let instance_create_info = InstanceCreateInfo {
             application_name: Some(String::from("Thunder Path")),
-            enabled_extensions: required_instance_extensions,
+            flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
+            enabled_extensions: required_inst_ext,
             ..Default::default()
         };
 
         let instance =
             Instance::new(library.clone(), instance_create_info).unwrap();
 
-        let device_extensions = DeviceExtensions {
-            khr_swapchain: true,
-            ..DeviceExtensions::empty()
-        };
-
+        // Build surface from a window if gui is enabled.
         let surface = if spawn_window {
-            Some(
-                WindowBuilder::new()
-                    .build_vk_surface(&event_loop.unwrap(), instance.clone())
-                    .unwrap(),
-            )
+            let loop_clone = event_loop.as_ref().unwrap();
+            let window = Arc::new(WindowBuilder::new().build(loop_clone).unwrap());
+            let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
+            Some(surface)
         } else {
             None
         };
 
+        let mut device_extensions = DeviceExtensions {
+            khr_swapchain: true,
+            ..DeviceExtensions::empty()
+        };
+
         let available_devices = instance.enumerate_physical_devices().unwrap();
-        let (chosen_device, queue_fams) = available_devices
+        let chosen_device = available_devices
             .filter(|device| {
                 device.api_version() >= Version::V1_3
                     || device.supported_extensions().khr_dynamic_rendering
@@ -161,13 +166,15 @@ impl GPUInstance {
             .filter(|device| {
                 device.supported_extensions().contains(&device_extensions)
             })
-            .filter_map(|device| {
+            .filter(|device| {
+                let device = device.clone();
                 let queue_fams = device.queue_family_properties();
                 let fams_iter = queue_fams.iter();
 
                 //Check if we have a graphics queue and surface support if
                 //rendering to screen (application should run either way)
                 let graphics = fams_iter
+                    .clone()
                     .enumerate()
                     .position(|(i, fam)| {
                         if !spawn_window {
@@ -186,6 +193,7 @@ impl GPUInstance {
 
                 //We need compute shaders
                 let compute = fams_iter
+                    .clone()
                     .position(|fam| {
                         fam.queue_flags.contains(QueueFlags::COMPUTE)
                     })
@@ -193,33 +201,44 @@ impl GPUInstance {
 
                 //We need to shuttle memory around between CPU and GPU
                 let transfer = fams_iter
+                    .clone()
                     .position(|fam| {
                         fam.queue_flags.contains(QueueFlags::TRANSFER)
                     })
                     .is_some();
 
                 if graphics && compute && transfer {
-                    Some((device, queue_fams))
+                    true
+                    //Some((device.clone(), queue_fams))
                 } else {
-                    None::<(Arc<PhysicalDevice>, &[QueueFamilyProperties])>
+                    false
+                    //None::<(Arc<PhysicalDevice>, &[QueueFamilyProperties])>
                 }
             })
-            .min_by_key(|(device, fams)| {
-                match device.properties().device_type {
-                    PhysicalDeviceType::DiscreteGpu => 0,
-                    PhysicalDeviceType::IntegratedGpu => 1,
-                    PhysicalDeviceType::VirtualGpu => 2,
-                    PhysicalDeviceType::Cpu => 3,
-                    PhysicalDeviceType::Other => 4,
-                    _ => 5,
-                }
+            .min_by_key(|device| match device.properties().device_type {
+                PhysicalDeviceType::DiscreteGpu => 0,
+                PhysicalDeviceType::IntegratedGpu => 1,
+                PhysicalDeviceType::VirtualGpu => 2,
+                PhysicalDeviceType::Cpu => 3,
+                PhysicalDeviceType::Other => 4,
+                _ => 5,
             })
             .expect("no suitable physical device found");
 
+        if chosen_device.api_version() < Version::V1_3 {
+            device_extensions.khr_dynamic_rendering = true;
+        }
+
+        // Extract Queue Families from Chosen Device
+        let queue_fams = chosen_device.queue_family_properties();
+
+        // Setup queue creation info
         let mut queue_create_info: Vec<QueueCreateInfo> = Vec::new();
-        for (i, &fam) in queue_fams.iter().enumerate() {
+        for (i, ref _fam) in queue_fams.iter().enumerate() {
             queue_create_info.push(QueueCreateInfo {
-                queue_family_index: u32::try_from(i).unwrap(),
+                queue_family_index: u32::try_from(i).expect(
+                    "Large queue fam indice detected! Should not happen!",
+                ),
                 ..Default::default()
             });
         }
@@ -257,15 +276,10 @@ impl GPUInstance {
             Default::default(),
         );
 
-        let event_loop = if spawn_window {
-            Some(EventLoop::new())
-        } else {
-            None
-        };
-
         //Generate GUI data if desired, return optional struct
         let gui_resources = if spawn_window {
             let surface = surface.unwrap();
+            let event_loop = event_loop.unwrap();
 
             let surface_capabilities = device
                 .physical_device()
@@ -317,6 +331,7 @@ impl GPUInstance {
 
             Some(GuiResources {
                 surface,
+                event_loop,
                 viewport,
                 swapchain,
                 swapchain_images,
@@ -331,7 +346,7 @@ impl GPUInstance {
             GPUInstance {
                 library,
                 instance,
-                instance_extensions: required_instance_extensions,
+                instance_extensions: required_inst_ext,
                 device_extensions,
                 physical_device: chosen_device,
                 device,
@@ -340,7 +355,6 @@ impl GPUInstance {
                 command_buff_allocator,
                 descriptor_allocator,
             },
-            event_loop,
             gui_resources,
         ));
     }

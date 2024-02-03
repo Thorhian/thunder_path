@@ -61,18 +61,22 @@ fn main() {
         stock_mesh,
     };
 
+    // Initialize GPU resources, such as a vulkan instance,
+    // choosing a device, etc.
     let result = gpu::GPUInstance::initialize_instance(true);
-    let (gpu_instance, event_loop_result, gui_resources_result) =
+    let (gpu_instance, gui_resources_result) =
         result.expect("failed to initialize gpu");
 
+    // Wrap our basic GPU resources into an Arc to share around
     let gpu_instance = Arc::new(gpu_instance);
 
+    // Setup window for rendering debug/live view of the path
+    // generation process.
     if cli.gui {
-        let event_loop =
-            event_loop_result.expect("failed to create event loop");
         let gui_resources =
             gui_resources_result.expect("failed to create gui resources");
 
+        // 
         let target_mesh_pipeline =
             gpu_instance.create_gui_mesh_pipeline(&gui_resources);
         let (target_mesh, bounds) =
@@ -83,6 +87,7 @@ fn main() {
             bounds,
         };
 
+        // 
         let pipelines = vec![target_mesh_pipeline];
         let mesh_models = vec![target_mesh_model];
         let mesh_pipe_indices = vec![0];
@@ -91,7 +96,7 @@ fn main() {
         for model in mesh_models {
             let vbo_size = model.vbo_contents.len();
             let vbo_stage = Buffer::from_iter(
-                gpu_instance.standard_mem_alloc,
+                gpu_instance.standard_mem_alloc.clone(),
                 vulkano::buffer::BufferCreateInfo {
                     usage: BufferUsage::TRANSFER_SRC,
                     ..Default::default()
@@ -106,7 +111,7 @@ fn main() {
             .unwrap();
 
             let vbo_device = Buffer::new_slice::<gpu::ModelVertex>(
-                gpu_instance.standard_mem_alloc,
+                gpu_instance.standard_mem_alloc.clone(),
                 BufferCreateInfo {
                     usage: BufferUsage::VERTEX_BUFFER
                         | BufferUsage::TRANSFER_DST,
@@ -167,7 +172,6 @@ fn main() {
 
         gpu::window::run_gui_loop(
             gpu_instance.clone(),
-            event_loop,
             gui_resources,
             scene,
         );
