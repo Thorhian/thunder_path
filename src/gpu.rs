@@ -4,12 +4,19 @@ pub mod window;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use nalgebra::Vector3;
+use vulkano::image::ImageCreateInfo;
+use vulkano::image::ImageType;
+use vulkano::memory::allocator::AllocationCreateInfo;
 use std::println;
 use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
+use vulkano::device::Features;
+use vulkano::format::Format;
 use vulkano::image::Image;
 use vulkano::pipeline::graphics::color_blend::ColorBlendAttachmentState;
 use vulkano::pipeline::graphics::color_blend::ColorBlendState;
+use vulkano::pipeline::graphics::depth_stencil::DepthState;
+use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::RasterizationState;
@@ -105,10 +112,7 @@ pub struct GPUInstance {
 impl GPUInstance {
     pub fn initialize_instance(
         spawn_window: bool,
-    ) -> Result<
-        (GPUInstance, Option<GuiResources>),
-        LoadingError,
-    > {
+    ) -> Result<(GPUInstance, Option<GuiResources>), LoadingError> {
         //Get The Vulkan Library
         let library = match VulkanLibrary::new() {
             Ok(library) => library,
@@ -145,17 +149,23 @@ impl GPUInstance {
         // Build surface from a window if gui is enabled.
         let surface = if spawn_window {
             let loop_clone = event_loop.as_ref().unwrap();
-            let window = Arc::new(WindowBuilder::new().build(loop_clone).unwrap());
-            let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
+            let window =
+                Arc::new(WindowBuilder::new().build(loop_clone).unwrap());
+            let surface =
+                Surface::from_window(instance.clone(), window.clone()).unwrap();
             Some(surface)
         } else {
             None
         };
 
         let mut device_extensions = DeviceExtensions {
-            khr_swapchain: true,
+            khr_dynamic_rendering: true,
             ..DeviceExtensions::empty()
         };
+
+        if spawn_window {
+            device_extensions.khr_swapchain = true;
+        }
 
         let available_devices = instance.enumerate_physical_devices().unwrap();
         let chosen_device = available_devices
@@ -227,6 +237,9 @@ impl GPUInstance {
 
         if chosen_device.api_version() < Version::V1_3 {
             device_extensions.khr_dynamic_rendering = true;
+            println!("Enabling dynamic rendering extension...");
+        } else {
+            println!("V1.3 Found, don't need dynamic rendering extension.");
         }
 
         // Extract Queue Families from Chosen Device
@@ -243,8 +256,6 @@ impl GPUInstance {
             });
         }
 
-        println!("Queue Creation Info Structs: {:#?}", queue_create_info);
-
         println!(
             "Using: {} {:?}",
             chosen_device.properties().device_name,
@@ -256,6 +267,10 @@ impl GPUInstance {
             DeviceCreateInfo {
                 enabled_extensions: device_extensions,
                 queue_create_infos: queue_create_info,
+                enabled_features: Features {
+                    dynamic_rendering: true,
+                    ..Features::empty()
+                },
                 ..Default::default()
             },
         )
@@ -327,6 +342,7 @@ impl GPUInstance {
                 &swapchain_images,
                 &gui_renderpass,
                 &mut viewport,
+                memory_alloc.clone()
             );
 
             Some(GuiResources {
@@ -365,18 +381,25 @@ impl GPUInstance {
         swapchain: Arc<Swapchain>,
     ) -> Arc<RenderPass> {
         return vulkano::single_pass_renderpass!(
-        device.clone(),
-        attachments: {
+            device.clone(),
+            attachments: {
                 color: {
                     format: swapchain.image_format(),
                     samples: 1,
                     load_op: Clear,
                     store_op: Store,
+                },
+                depth_stencil: {
+                    format: Format::D16_UNORM,
+                    samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
+                }
+
             },
-        },
             pass: {
                 color: [color],
-                depth_stencil: {},
+                depth_stencil: {depth_stencil},
             },
         )
         .unwrap();
@@ -386,10 +409,27 @@ impl GPUInstance {
         images: &[Arc<Image>],
         render_pass: &Arc<RenderPass>,
         viewport: &mut Viewport,
+        mem_allocator: Arc<StandardMemoryAllocator>
     ) -> Vec<Arc<Framebuffer>> {
-        let extent = images.first().unwrap().extent();
+        let extent = images[0].extent();
 
         viewport.extent = [extent[0] as f32, extent[1] as f32];
+
+        let depth_buffer = ImageView::new_default(
+            Image::new(
+                mem_allocator,
+                ImageCreateInfo {
+                    image_type: ImageType::Dim2d,
+                    format: Format::D16_UNORM,
+                    extent: images[0].extent(),
+                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                    ..Default::default()
+                },
+                AllocationCreateInfo::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
         images
             .iter()
@@ -398,7 +438,7 @@ impl GPUInstance {
                 Framebuffer::new(
                     render_pass.clone(),
                     FramebufferCreateInfo {
-                        attachments: vec![view],
+                        attachments: vec![view, depth_buffer.clone()],
                         ..Default::default()
                     },
                 )
@@ -452,6 +492,8 @@ impl GPUInstance {
             )
             .unwrap();
 
+            println!("Gui Pipeline Layout: {:?}", test_layout);
+
             let gui_renderpass = gui_resources.gui_renderpass.clone();
             let subpass = Subpass::from(gui_renderpass, 0).unwrap();
 
@@ -464,6 +506,10 @@ impl GPUInstance {
                     input_assembly_state: Some(InputAssemblyState::default()),
                     viewport_state: Some(ViewportState::default()),
                     rasterization_state: Some(RasterizationState::default()),
+                    depth_stencil_state: Some(DepthStencilState {
+                        depth: Some(DepthState::simple()),
+                        ..Default::default()
+                    }),
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(
                         ColorBlendState::with_attachment_states(

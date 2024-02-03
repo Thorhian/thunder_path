@@ -10,7 +10,7 @@ use vulkano::{
     render_pass,
     swapchain::{acquire_next_image, SwapchainCreateInfo, SwapchainPresentInfo},
     sync::{self, GpuFuture},
-    Validated, VulkanError,
+    Validated, VulkanError, descriptor_set::allocator::StandardDescriptorSetAllocator,
 };
 use winit::{
     event::{Event, WindowEvent},
@@ -34,17 +34,23 @@ pub fn run_gui_loop(
         .position(|fam| fam.queue_flags.contains(QueueFlags::GRAPHICS))
         .unwrap();
 
+    let device = gpu_instance.device.clone();
     let graphics_queue = gpu_instance.queues[queue_index as usize].clone();
 
     let command_buffer_allocater = StandardCommandBufferAllocator::new(
-        gpu_instance.device.clone(),
+        device.clone(),
         Default::default(),
+    );
+
+    let descriptor_set_alloc = StandardDescriptorSetAllocator::new(
+        device.clone(),
+        Default::default()
     );
 
     let event_loop = gui_resources.event_loop;
 
     let mut recreate_swapchain = false;
-    let mut previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
+    let mut previous_frame_end = Some(sync::now(device.clone()).boxed());
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent {
@@ -90,6 +96,7 @@ pub fn run_gui_loop(
                             &new_images,
                             &gui_resources.gui_renderpass,
                             &mut gui_resources.viewport,
+                            gpu_instance.standard_mem_alloc.clone()
                         );
 
                     recreate_swapchain = false;
@@ -108,7 +115,7 @@ pub fn run_gui_loop(
                             return;
                         }
                         Err(e) => panic!("failed to acquire next image: {e}"),
-                    };
+                };
 
                 if suboptimal {
                     recreate_swapchain = true;
@@ -179,11 +186,11 @@ pub fn run_gui_loop(
                     }
                     Err(VulkanError::OutOfDate) => {
                         recreate_swapchain = true;
-                        previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
+                        previous_frame_end = Some(sync::now(device.clone()).boxed());
                     }
                     Err(e) => {
                         println!("failed to flush future: {e}");
-                        previous_frame_end = Some(sync::now(gpu_instance.device.clone()).boxed());
+                        previous_frame_end = Some(sync::now(device.clone()).boxed());
                     }
                 }
             }
