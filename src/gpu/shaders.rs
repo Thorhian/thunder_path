@@ -29,7 +29,8 @@ pub mod edge_expansion {
 pub mod gui_mesh_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "src/gpu/glsl/gui_mesh_vertex.glsl"
+        path: "src/gpu/glsl/gui_mesh_vertex.glsl",
+        linalg_type: "nalgebra"
     }
 }
 

@@ -88,7 +88,6 @@ pub struct ModelVertex {
 
 pub struct GuiResources {
     pub surface: Arc<Surface>,
-    pub event_loop: EventLoop<()>,
     pub viewport: Viewport,
     pub swapchain: Arc<Swapchain>,
     pub swapchain_images: Vec<Arc<Image>>,
@@ -112,7 +111,7 @@ pub struct GPUInstance {
 impl GPUInstance {
     pub fn initialize_instance(
         spawn_window: bool,
-    ) -> Result<(GPUInstance, Option<GuiResources>), LoadingError> {
+    ) -> Result<(GPUInstance, Option<GuiResources>, Option<EventLoop<()>>), LoadingError> {
         //Get The Vulkan Library
         let library = match VulkanLibrary::new() {
             Ok(library) => library,
@@ -257,7 +256,7 @@ impl GPUInstance {
         }
 
         println!(
-            "Using: {} {:?}",
+            "Using: {} {:#?}",
             chosen_device.properties().device_name,
             chosen_device.properties().device_type,
         );
@@ -294,7 +293,6 @@ impl GPUInstance {
         //Generate GUI data if desired, return optional struct
         let gui_resources = if spawn_window {
             let surface = surface.unwrap();
-            let event_loop = event_loop.unwrap();
 
             let surface_capabilities = device
                 .physical_device()
@@ -347,7 +345,6 @@ impl GPUInstance {
 
             Some(GuiResources {
                 surface,
-                event_loop,
                 viewport,
                 swapchain,
                 swapchain_images,
@@ -372,11 +369,12 @@ impl GPUInstance {
                 descriptor_allocator,
             },
             gui_resources,
+            event_loop
         ));
     }
 
     // Creates renderpass for demo UI
-    fn create_gui_renderpass(
+    pub fn create_gui_renderpass(
         device: Arc<Device>,
         swapchain: Arc<Swapchain>,
     ) -> Arc<RenderPass> {
@@ -464,7 +462,6 @@ impl GPUInstance {
         &self,
         gui_resources: &GuiResources,
     ) -> Arc<GraphicsPipeline> {
-        // TODO: Will need to redo layout stuff here
         let pipeline = {
             let v_shader = shaders::gui_mesh_vert::load(self.device.clone())
                 .unwrap()
@@ -492,10 +489,11 @@ impl GPUInstance {
             )
             .unwrap();
 
-            println!("Gui Pipeline Layout: {:?}", test_layout);
+            println!("Gui Pipeline Layout: {:#?}", test_layout);
 
             let gui_renderpass = gui_resources.gui_renderpass.clone();
             let subpass = Subpass::from(gui_renderpass, 0).unwrap();
+            let extent = gui_resources.gui_framebuffers[0].extent();
 
             GraphicsPipeline::new(
                 self.device.clone(),
@@ -504,7 +502,16 @@ impl GPUInstance {
                     stages: stages.into_iter().collect(),
                     vertex_input_state: Some(vertex_input_state),
                     input_assembly_state: Some(InputAssemblyState::default()),
-                    viewport_state: Some(ViewportState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [Viewport {
+                            offset: [0.0, 0.0],
+                            extent: [extent[0] as f32, extent[1] as f32],
+                            depth_range: 0.0..=1.0,
+                        }]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    }),
                     rasterization_state: Some(RasterizationState::default()),
                     depth_stencil_state: Some(DepthStencilState {
                         depth: Some(DepthState::simple()),
@@ -517,9 +524,6 @@ impl GPUInstance {
                             ColorBlendAttachmentState::default(),
                         ),
                     ),
-                    dynamic_state: [DynamicState::Viewport]
-                        .into_iter()
-                        .collect(),
                     subpass: Some(subpass.into()),
                     ..GraphicsPipelineCreateInfo::layout(test_layout)
                 },

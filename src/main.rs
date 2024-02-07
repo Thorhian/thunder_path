@@ -64,7 +64,7 @@ fn main() {
     // Initialize GPU resources, such as a vulkan instance,
     // choosing a device, etc.
     let result = gpu::GPUInstance::initialize_instance(true);
-    let (gpu_instance, gui_resources_result) =
+    let (gpu_instance, gui_resources_result, event_loop) =
         result.expect("failed to initialize gpu");
 
     // Wrap our basic GPU resources into an Arc to share around
@@ -174,6 +174,7 @@ fn main() {
             gpu_instance.clone(),
             gui_resources,
             scene,
+            event_loop.expect("Event Loop Creation Failed.")
         );
     }
 
