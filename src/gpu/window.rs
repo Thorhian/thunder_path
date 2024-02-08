@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use vulkano::{
     buffer::{
@@ -50,6 +51,14 @@ pub fn run_gui_loop(
 
     let device = gpu_instance.device.clone();
     let graphics_queue = gpu_instance.queues[queue_index as usize].clone();
+
+    //----------------------Constants---------------------------------------//
+    let vulkan_adjustment = nalgebra::Matrix4::new(
+        1.0, 0.0, 0.0, 0.0,
+        0.0, -1.0, 0.0, 0.0,
+        0.0, 0.0, -1.0, 0.0,
+        0.0, 0.0, 0.0, -1.0
+    );
 
     //----------------------Allocators--------------------------------------//
     let standard_alloc = gpu_instance.standard_mem_alloc.clone();
@@ -107,7 +116,7 @@ pub fn run_gui_loop(
                     let (new_swapchain, new_images) = gui_resources
                         .swapchain
                         .recreate(SwapchainCreateInfo {
-                            image_extent: dimensions.into(),
+                            image_extent: dimensions.clone().into(),
                             ..gui_resources.swapchain.create_info()
                         })
                         .expect("Failed to recreate swapchain");
@@ -171,16 +180,21 @@ pub fn run_gui_loop(
                 let gui_layout = scene.pipelines[0].layout();
                 let model_vbo = scene.pipeline_dependencies[0].vbo.clone();
                 let desc_layout = gui_layout.set_layouts().get(0).unwrap();
-                let perspective_mat = nalgebra::Matrix4::new_perspective(
-                    16.0 / 9.0,
-                    40.0,
-                    -10.0,
-                    20.0,
+                let view = nalgebra::Matrix4::new_translation(
+                    &nalgebra::Vector3::new(0.0, 0.0, 20.0)
                 );
+
+                let perspective_mat = nalgebra::Matrix4::new_perspective(
+                    dimensions.width as f32 / dimensions.height as f32,
+                    30.0,
+                    -12.0,
+                    40.0,
+                );
+
                 let v_ubo_contents = shaders::gui_mesh_vert::MatrixUniforms {
                     model: nalgebra::Matrix4::identity(),
-                    view: nalgebra::Matrix4::identity(),
-                    proj: perspective_mat,
+                    view: view,
+                    proj: perspective_mat * vulkan_adjustment,
                 };
 
                 let mvp_ubo = ubo_subbuffer_alloc.allocate_sized().unwrap();

@@ -489,8 +489,6 @@ impl GPUInstance {
             )
             .unwrap();
 
-            println!("Gui Pipeline Layout: {:#?}", test_layout);
-
             let gui_renderpass = gui_resources.gui_renderpass.clone();
             let subpass = Subpass::from(gui_renderpass, 0).unwrap();
             let extent = gui_resources.gui_framebuffers[0].extent();
