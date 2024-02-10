@@ -960,3 +960,19 @@ fn generate_ortho_matrix(
 
     return ortho_matrix.transpose();
 }
+
+
+pub fn perspective_matrix(
+    aspect_ratio: f32,
+    fov_rad: f32,
+    near: f32,
+    far: f32
+) -> nalgebra::Matrix4<f32> {
+    return nalgebra::Matrix4::new(
+        1.0 / aspect_ratio, 0.0, 0.0, 0.0,
+        0.0, 1.0 / (fov_rad / 2.0).tan(), 0.0, 0.0,
+        0.0, 0.0, far / (far - near), -((near * far) / (far - near)),
+        0.0, 0.0, 1.0, 0.0
+    );
+}
+

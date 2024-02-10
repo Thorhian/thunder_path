@@ -1,3 +1,4 @@
+use nalgebra;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -40,6 +41,7 @@ pub fn run_gui_loop(
     gpu_instance: Arc<GPUInstance>,
     mut gui_resources: GuiResources,
     mut scene: SceneContents,
+    bounds: [f32; 6],
     event_loop: EventLoop<()>,
 ) {
     let queue_index = gpu_instance
@@ -53,11 +55,30 @@ pub fn run_gui_loop(
     let graphics_queue = gpu_instance.queues[queue_index as usize].clone();
 
     //----------------------Constants---------------------------------------//
-    let vulkan_adjustment = nalgebra::Matrix4::new(
+    const VULKAN_ADJUSTMENT: nalgebra::Matrix<
+        f32,
+        nalgebra::Const<4>,
+        nalgebra::Const<4>,
+        nalgebra::ArrayStorage<f32, 4, 4>,
+    > = nalgebra::Matrix4::new(
         1.0, 0.0, 0.0, 0.0,
         0.0, -1.0, 0.0, 0.0,
         0.0, 0.0, -1.0, 0.0,
-        0.0, 0.0, 0.0, -1.0
+        0.0, 0.0, 0.0, -1.0,
+    );
+    //----------------------Camera Information-------------------------------//
+    
+    let x_mid = bounds[0] + ((bounds[1] - bounds[0]) / 2.0);
+    let y_mid = bounds[2] + ((bounds[3] - bounds[2]) / 2.0);
+    let z_mid = bounds[4] + ((bounds[5] - bounds[4]) / 2.0);
+    let camera_focus = nalgebra::Point3::new(
+        x_mid, y_mid, z_mid
+    );
+
+    let view = nalgebra::Matrix4::look_at_rh(
+        &nalgebra::Point3::new(10.0, 30.0, 100.0), 
+        &camera_focus, 
+        &nalgebra::Vector3::new(0.0, 1.0, 0.0)
     );
 
     //----------------------Allocators--------------------------------------//
@@ -97,7 +118,7 @@ pub fn run_gui_loop(
             } => {
                 recreate_swapchain = true;
             }
-            Event::RedrawEventsCleared => {
+            Event::MainEventsCleared => {
                 let window = gui_resources
                     .surface
                     .object()
@@ -180,21 +201,31 @@ pub fn run_gui_loop(
                 let gui_layout = scene.pipelines[0].layout();
                 let model_vbo = scene.pipeline_dependencies[0].vbo.clone();
                 let desc_layout = gui_layout.set_layouts().get(0).unwrap();
+                
                 let view = nalgebra::Matrix4::new_translation(
-                    &nalgebra::Vector3::new(0.0, 0.0, 20.0)
+                    &nalgebra::Vector3::new(0.0, 0.0, 20.0),
                 );
+                
+                let aspect_ratio =
+                    dimensions.width as f32 / dimensions.height as f32;
 
+                
                 let perspective_mat = nalgebra::Matrix4::new_perspective(
-                    dimensions.width as f32 / dimensions.height as f32,
-                    30.0,
-                    -12.0,
-                    40.0,
+                    aspect_ratio,
+                    3.14 / 3.0,
+                    -10.0,
+                    50.0,
                 );
+                
+                /*
+                let perspective_mat = crate::gpu::perspective_matrix(
+                    aspect_ratio, 3.14 / 3.0, -10.0, 50.0
+                );*/
 
                 let v_ubo_contents = shaders::gui_mesh_vert::MatrixUniforms {
                     model: nalgebra::Matrix4::identity(),
                     view: view,
-                    proj: perspective_mat * vulkan_adjustment,
+                    proj: perspective_mat * VULKAN_ADJUSTMENT,
                 };
 
                 let mvp_ubo = ubo_subbuffer_alloc.allocate_sized().unwrap();

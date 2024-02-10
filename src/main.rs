@@ -174,6 +174,7 @@ fn main() {
             gpu_instance.clone(),
             gui_resources,
             scene,
+            bounds,
             event_loop.expect("Event Loop Creation Failed.")
         );
     }
