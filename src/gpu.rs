@@ -4,15 +4,20 @@ pub mod window;
 use nalgebra::Matrix2x4;
 use nalgebra::Vector2;
 use nalgebra::Vector3;
-use vulkano::image::ImageCreateInfo;
-use vulkano::image::ImageType;
-use vulkano::memory::allocator::AllocationCreateInfo;
 use std::println;
 use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::Features;
 use vulkano::format::Format;
 use vulkano::image::Image;
+use vulkano::image::ImageCreateInfo;
+use vulkano::image::ImageType;
+use vulkano::instance::debug::DebugUtilsMessageSeverity;
+use vulkano::instance::debug::DebugUtilsMessageType;
+use vulkano::instance::debug::DebugUtilsMessenger;
+use vulkano::instance::debug::DebugUtilsMessengerCallback;
+use vulkano::instance::debug::DebugUtilsMessengerCreateInfo;
+use vulkano::memory::allocator::AllocationCreateInfo;
 use vulkano::pipeline::graphics::color_blend::ColorBlendAttachmentState;
 use vulkano::pipeline::graphics::color_blend::ColorBlendState;
 use vulkano::pipeline::graphics::depth_stencil::DepthState;
@@ -111,7 +116,10 @@ pub struct GPUInstance {
 impl GPUInstance {
     pub fn initialize_instance(
         spawn_window: bool,
-    ) -> Result<(GPUInstance, Option<GuiResources>, Option<EventLoop<()>>), LoadingError> {
+    ) -> Result<
+        (GPUInstance, Option<GuiResources>, Option<EventLoop<()>>),
+        LoadingError,
+    > {
         //Get The Vulkan Library
         let library = match VulkanLibrary::new() {
             Ok(library) => library,
@@ -120,7 +128,7 @@ impl GPUInstance {
 
         // If we are using the Gui, get the event loop and needed
         // surface extensions
-        let (event_loop, required_inst_ext) = if spawn_window {
+        let (event_loop, mut required_inst_ext) = if spawn_window {
             let event_loop = EventLoop::new();
             let extensions = Surface::required_extensions(&event_loop);
             (Some(event_loop), extensions)
@@ -133,11 +141,20 @@ impl GPUInstance {
             )
         };
 
+        required_inst_ext.ext_debug_utils = true;
+
         println!("Default Extensions: {:#?}", required_inst_ext);
+
+        let layers: Vec<std::string::String> = if cfg!(debug_assertions) {
+            vec!["VK_LAYER_KHRONOS_validation".to_owned()]
+        } else {
+            Vec::new()
+        };
 
         let instance_create_info = InstanceCreateInfo {
             application_name: Some(String::from("Thunder Path")),
             flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
+            enabled_layers: layers,
             enabled_extensions: required_inst_ext,
             ..Default::default()
         };
@@ -340,7 +357,7 @@ impl GPUInstance {
                 &swapchain_images,
                 &gui_renderpass,
                 &mut viewport,
-                memory_alloc.clone()
+                memory_alloc.clone(),
             );
 
             Some(GuiResources {
@@ -369,7 +386,7 @@ impl GPUInstance {
                 descriptor_allocator,
             },
             gui_resources,
-            event_loop
+            event_loop,
         ));
     }
 
@@ -407,7 +424,7 @@ impl GPUInstance {
         images: &[Arc<Image>],
         render_pass: &Arc<RenderPass>,
         viewport: &mut Viewport,
-        mem_allocator: Arc<StandardMemoryAllocator>
+        mem_allocator: Arc<StandardMemoryAllocator>,
     ) -> Vec<Arc<Framebuffer>> {
         let extent = images[0].extent();
 
@@ -420,7 +437,8 @@ impl GPUInstance {
                     image_type: ImageType::Dim2d,
                     format: Format::D16_UNORM,
                     extent: images[0].extent(),
-                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT
+                        | ImageUsage::TRANSIENT_ATTACHMENT,
                     ..Default::default()
                 },
                 AllocationCreateInfo::default(),
@@ -531,7 +549,70 @@ impl GPUInstance {
         //End Creation of pipeline
         return pipeline;
     }
+
+    // Returns a callback function for debugging, should only
+    // be used in debug mode when validation layers are enabled.
+    pub unsafe fn create_debug_callback(self) -> Option<DebugUtilsMessenger> {
+        DebugUtilsMessenger::new(
+            self.instance.clone(),
+            DebugUtilsMessengerCreateInfo {
+                message_severity: DebugUtilsMessageSeverity::ERROR
+                    | DebugUtilsMessageSeverity::WARNING
+                    | DebugUtilsMessageSeverity::INFO,
+                message_type: DebugUtilsMessageType::GENERAL
+                    | DebugUtilsMessageType::VALIDATION
+                    | DebugUtilsMessageType::PERFORMANCE,
+                ..DebugUtilsMessengerCreateInfo::user_callback(
+                    DebugUtilsMessengerCallback::new(
+                        |message_sev, message_type, cb_data| {
+                            let severity = if message_sev
+                                .intersects(DebugUtilsMessageSeverity::ERROR)
+                            {
+                                "Error"
+                            } else if message_sev
+                                .intersects(DebugUtilsMessageSeverity::WARNING)
+                            {
+                                "Warning"
+                            } else if message_sev
+                                .intersects(DebugUtilsMessageSeverity::INFO)
+                            {
+                                "Info"
+                            } else {
+                                "Unknown Severity"
+                            };
+
+                            let cb_type = if message_type
+                                .intersects(DebugUtilsMessageType::GENERAL)
+                            {
+                                "General"
+                            } else if message_type
+                                .intersects(DebugUtilsMessageType::VALIDATION)
+                            {
+                                "Validation"
+                            } else if message_type
+                                .intersects(DebugUtilsMessageType::PERFORMANCE)
+                            {
+                                "Performance"
+                            } else {
+                                "Unknown Type"
+                            };
+
+                            println!(
+                                "{} {} {}: {}",
+                                cb_data.message_id_name.unwrap_or("unknown"),
+                                cb_type,
+                                severity,
+                                cb_data.message
+                            )
+                        },
+                    ),
+                )
+            },
+        )
+        .ok()
+    }
 }
+
 pub enum MeshType {
     TargetMesh,
     StockMesh,
@@ -553,299 +634,6 @@ pub struct SceneContents {
     pub pipelines: Vec<Arc<GraphicsPipeline>>,
     pub mesh_pipe_indices: Vec<usize>,
 }
-
-/*pub fn initialize_device() -> (Arc<vulkano::device::Device>, Arc<Queue>) {
-    let v_lib = VulkanLibrary::new().unwrap();
-
-    println!("API Version: {}", v_lib.api_version());
-
-    let create_info = InstanceCreateInfo::default();
-    let main_instance = Instance::new(v_lib, create_info).unwrap();
-
-    let dev_desc = main_instance
-        .enumerate_physical_devices()
-        .unwrap()
-        .next()
-        .unwrap();
-
-    let queue_family_index = dev_desc
-        .queue_family_properties()
-        .iter()
-        .enumerate()
-        .position(|(_, q)| q.queue_flags.graphics)
-        .expect("couldn't find a graphical queue family") as u32;
-
-    let queue_families = dev_desc.queue_family_properties();
-
-    let (device, mut queues) = Device::new(
-        dev_desc,
-        DeviceCreateInfo {
-            queue_create_infos: vec![QueueCreateInfo {
-                queue_family_index,
-                ..Default::default()
-            }],
-            ..Default::default()
-        },
-    )
-    .expect("Failed to create device and queues.");
-
-    let queue = queues.next().unwrap();
-
-    return (device, queue);
-}*/
-
-/*pub fn process_job(job: Job) {
-    let mut renderdoc_res = renderdoc::RenderDoc::<renderdoc::V140>::new();
-
-    let (device, queue) = initialize_device();
-    let allocator = StandardMemoryAllocator::new_default(device.clone());
-    let command_allocator = StandardCommandBufferAllocator::new(
-        device.clone(),
-        StandardCommandBufferAllocatorCreateInfo {
-            ..Default::default()
-        },
-    );
-
-    renderdoc_res = match renderdoc_res {
-        Ok(mut api) => {
-            api.start_frame_capture(null(), null());
-            Ok(api)
-        },
-
-        Err(error) => Err(error),
-    };
-
-    let descriptor_allocator = StandardDescriptorSetAllocator::new(device.clone());
-
-    let target_model = job.target_mesh.clone();
-    let stock_model = job.target_mesh.clone();
-    let (target_vert_buff, target_bounds) = import_verts(target_model);
-    let (stock_vert_buff, _stock_bounds) = import_verts(stock_model);
-    let target_vert_count: u32 = target_vert_buff.len().try_into().unwrap();
-    let _stock_vert_count: u32 = stock_vert_buff.len().try_into().unwrap();
-
-    let ortho_matrix = generate_ortho_matrix(
-        target_bounds[0].into(),
-        target_bounds[1].into(),
-        target_bounds[2].into(),
-        target_bounds[3].into(),
-        (target_bounds[5] - 10.0).into(),
-        target_bounds[4].into(),
-    );
-    println!("Ortho Matrix: {}", ortho_matrix);
-
-    let ortho_uniform_buffer = CpuAccessibleBuffer::from_data(
-        &allocator,
-        BufferUsage {
-            uniform_buffer: true,
-            ..Default::default()
-        },
-        false,
-        ortho_matrix
-    )
-    .expect("Failed to create ortho matrix buffer");
-
-    let gpu_target_buffer = CpuAccessibleBuffer::from_iter(
-        &allocator,
-        BufferUsage {
-            vertex_buffer: true,
-            ..Default::default()
-        },
-        false,
-        target_vert_buff,
-    )
-    .expect("Failed to create gpu_target_buffer");
-
-    let _gpu_stock_buffer = CpuAccessibleBuffer::from_iter(
-        &allocator,
-        BufferUsage {
-            vertex_buffer: true,
-            ..Default::default()
-        },
-        false,
-        stock_vert_buff,
-    )
-    .expect("Failed to create gpu_stock_buffer");
-
-    //Allocate Image Target
-    let image = StorageImage::new(
-        &allocator,
-        vulkano::image::ImageDimensions::Dim2d {
-            width: 1024,
-            height: 1024,
-            array_layers: 1,
-        },
-        vulkano::format::Format::R8G8B8A8_UNORM,
-        Some(queue.queue_family_index()),
-    )
-    .unwrap();
-    let depth_image = StorageImage::with_usage(
-        &allocator,
-        vulkano::image::ImageDimensions::Dim2d {
-            width: 1024,
-            height: 1024,
-            array_layers: 1,
-        },
-        vulkano::format::Format::D16_UNORM,
-        ImageUsage {
-            depth_stencil_attachment: true,
-            ..Default::default()
-        },
-        ImageCreateFlags::empty(),
-        Some(queue.queue_family_index()),
-    )
-    .unwrap();
-
-    let additive_passes = vulkano::single_pass_renderpass!(
-        device.clone(),
-        attachments: {
-            color: {
-                load: Clear,
-                store: Store,
-                format: vulkano::format::Format::R8G8B8A8_UNORM,
-                samples: 1,
-        },
-            depth: {
-                load: Clear,
-                store: DontCare,
-                format: vulkano::format::Format::D16_UNORM,
-                samples: 1,
-            }
-    },
-        pass: {
-            color: [color],
-            depth_stencil: {depth}
-        }
-    )
-    .unwrap();
-
-    let view = ImageView::new_default(image.clone()).unwrap();
-    let depth_view = ImageView::new_default(depth_image.clone()).unwrap();
-    let framebuffer = Framebuffer::new(
-        additive_passes.clone(),
-        FramebufferCreateInfo {
-            attachments: vec![view, depth_view],
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    let mut command_buff_builder = AutoCommandBufferBuilder::primary(
-        &command_allocator,
-        queue.queue_family_index(),
-        CommandBufferUsage::OneTimeSubmit,
-    )
-    .unwrap();
-
-    let viewport = Viewport {
-        origin: [0.0, 0.0],
-        dimensions: [1024.0, 1024.0],
-        depth_range: 0.0..1.0,
-    };
-
-    //Load Shaders
-    let target_vs =
-        shaders::target_vs::load(device.clone()).expect("Failed to Create Target Vertex Shader");
-    let target_frag = shaders::target_frag::load(device.clone())
-        .expect("Failed to Create Target Fragment Shader");
-    let _edge_detection = shaders::edge_detection::load(device.clone())
-        .expect("Failed to Create Edge Detection Shader");
-    let _edge_expansion = shaders::edge_expansion::load(device.clone())
-        .expect("Failed to Create Edge Expansion Shader");
-
-    let additive_pipeline_builder = GraphicsPipeline::start()
-        .vertex_input_state(BuffersDefinition::new().vertex::<CPUVertex>())
-        .vertex_shader(target_vs.entry_point("main").unwrap(), ())
-        .input_assembly_state(InputAssemblyState::new())
-        .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([viewport]))
-        .fragment_shader(target_frag.entry_point("main").unwrap(), ())
-        .depth_stencil_state(DepthStencilState::simple_depth_test())
-        .render_pass(Subpass::from(additive_passes.clone(), 0).unwrap())
-        .build(device.clone())
-        .expect("Pipeline Building Has Failed");
-
-    //Setup Descriptor Sets
-    let layout = additive_pipeline_builder
-        .layout()
-        .set_layouts()
-        .get(0)
-        .unwrap();
-    let desc_set = PersistentDescriptorSet::new(&descriptor_allocator,
-        layout.clone(),
-        [WriteDescriptorSet::buffer(0, ortho_uniform_buffer)])
-        .unwrap();
-
-    let png_buffer = CpuAccessibleBuffer::from_iter(
-        &allocator,
-        BufferUsage {
-            transfer_dst: true,
-            ..Default::default()
-        },
-        false,
-        (0..1024 * 1024 * 4).map(|_| 0u8),
-    )
-    .expect("Failed to create PNG buffer");
-
-    command_buff_builder
-        .begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1.0.into())],
-                ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
-            },
-            SubpassContents::Inline,
-        )
-        .unwrap()
-        .bind_pipeline_graphics(additive_pipeline_builder.clone())
-        .bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            additive_pipeline_builder.layout().clone(),
-            0,
-            desc_set.clone(),
-        )
-        .bind_vertex_buffers(0, gpu_target_buffer.clone())
-        //.bind_descriptor_sets()
-        .draw(target_vert_count, 1, 0, 0)
-        .unwrap()
-        .end_render_pass()
-        .unwrap()
-        .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
-            image,
-            png_buffer.clone(),
-        ))
-        .unwrap();
-
-    let command_buff = command_buff_builder.build().unwrap();
-
-    let future = sync::now(device.clone())
-        .then_execute(queue.clone(), command_buff)
-        .unwrap()
-        .then_signal_fence_and_flush()
-        .unwrap();
-
-    future.wait(None).unwrap();
-
-    let png_content = png_buffer.read().unwrap();
-    let png = ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &png_content[..]).unwrap();
-    png.save("test_img.png").unwrap();
-
-    renderdoc_res = match renderdoc_res {
-        Ok(mut api) => {
-            api.end_frame_capture(null(), null());
-            Ok(api)
-        },
-
-        Err(error) => Err(error)
-    };
-
-    match renderdoc_res {
-        Ok(_) => println!("Capture Data Should have been created."),
-        Err(err) => println!("No Data Captured: {}", err),
-    }
-
-    println!("Rendering Finished")
-
-
-}*/
 
 pub fn import_verts(
     mesh: &russimp::mesh::Mesh,
@@ -961,18 +749,28 @@ fn generate_ortho_matrix(
     return ortho_matrix.transpose();
 }
 
-
 pub fn perspective_matrix(
     aspect_ratio: f32,
     fov_rad: f32,
     near: f32,
-    far: f32
+    far: f32,
 ) -> nalgebra::Matrix4<f32> {
     return nalgebra::Matrix4::new(
-        1.0 / aspect_ratio, 0.0, 0.0, 0.0,
-        0.0, 1.0 / (fov_rad / 2.0).tan(), 0.0, 0.0,
-        0.0, 0.0, far / (far - near), -((near * far) / (far - near)),
-        0.0, 0.0, 1.0, 0.0
+        1.0 / aspect_ratio,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 / (fov_rad / 2.0).tan(),
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        far / (far - near),
+        -((near * far) / (far - near)),
+        0.0,
+        0.0,
+        1.0,
+        0.0,
     );
 }
-
