@@ -103,6 +103,7 @@ pub struct GuiResources {
 pub struct GPUInstance {
     pub library: Arc<VulkanLibrary>,
     pub instance: Arc<Instance>,
+    dbg_callback: Option<DebugUtilsMessenger>,
     pub instance_extensions: InstanceExtensions,
     pub device_extensions: DeviceExtensions,
     pub physical_device: Arc<PhysicalDevice>,
@@ -161,6 +162,14 @@ impl GPUInstance {
 
         let instance =
             Instance::new(library.clone(), instance_create_info).unwrap();
+
+        // Setup debug callback if we are building in debug
+        let dbg_cb = if cfg!(debug_assertions) {
+            println!("Creating debugging callback...");
+            unsafe { Self::create_debug_callback(instance.clone()) }
+        } else {
+            None
+        };
 
         // Build surface from a window if gui is enabled.
         let surface = if spawn_window {
@@ -376,6 +385,7 @@ impl GPUInstance {
             GPUInstance {
                 library,
                 instance,
+                dbg_callback: dbg_cb,
                 instance_extensions: required_inst_ext,
                 device_extensions,
                 physical_device: chosen_device,
@@ -552,13 +562,16 @@ impl GPUInstance {
 
     // Returns a callback function for debugging, should only
     // be used in debug mode when validation layers are enabled.
-    pub unsafe fn create_debug_callback(self) -> Option<DebugUtilsMessenger> {
+    unsafe fn create_debug_callback(
+        instance: Arc<Instance>,
+    ) -> Option<DebugUtilsMessenger> {
         DebugUtilsMessenger::new(
-            self.instance.clone(),
+            instance.clone(),
             DebugUtilsMessengerCreateInfo {
                 message_severity: DebugUtilsMessageSeverity::ERROR
                     | DebugUtilsMessageSeverity::WARNING
-                    | DebugUtilsMessageSeverity::INFO,
+                    | DebugUtilsMessageSeverity::INFO
+                    | DebugUtilsMessageSeverity::VERBOSE,
                 message_type: DebugUtilsMessageType::GENERAL
                     | DebugUtilsMessageType::VALIDATION
                     | DebugUtilsMessageType::PERFORMANCE,
@@ -577,6 +590,10 @@ impl GPUInstance {
                                 .intersects(DebugUtilsMessageSeverity::INFO)
                             {
                                 "Info"
+                            } else if message_sev
+                                .intersects(DebugUtilsMessageSeverity::VERBOSE)
+                            {
+                                "Verbose"
                             } else {
                                 "Unknown Severity"
                             };

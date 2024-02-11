@@ -9,8 +9,7 @@ use vulkano::{
     },
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
-        CommandBufferUsage, RenderPassBeginInfo, RenderingAttachmentInfo,
-        RenderingInfo,
+        CommandBufferUsage, RenderPassBeginInfo,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet,
@@ -19,7 +18,6 @@ use vulkano::{
     device::QueueFlags,
     memory::allocator::MemoryTypeFilter,
     pipeline::{Pipeline, PipelineBindPoint},
-    render_pass,
     swapchain::{
         acquire_next_image, SwapchainCreateInfo, SwapchainPresentInfo,
     },
@@ -75,7 +73,7 @@ pub fn run_gui_loop(
         x_mid, y_mid, z_mid
     );
 
-    let view = nalgebra::Matrix4::look_at_rh(
+    let _view = nalgebra::Matrix4::look_at_rh(
         &nalgebra::Point3::new(10.0, 30.0, 100.0), 
         &camera_focus, 
         &nalgebra::Vector3::new(0.0, 1.0, 0.0)
