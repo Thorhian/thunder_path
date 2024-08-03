@@ -176,8 +176,12 @@ impl GPUInstance {
             let loop_clone = event_loop.as_ref().unwrap();
             let window =
                 Arc::new(WindowBuilder::new().build(loop_clone).unwrap());
+
+            window.set_title("Thunder Path");
+
             let surface =
                 Surface::from_window(instance.clone(), window.clone()).unwrap();
+
             Some(surface)
         } else {
             None
@@ -333,6 +337,11 @@ impl GPUInstance {
 
             let window =
                 surface.object().unwrap().downcast_ref::<Window>().unwrap();
+
+            println!(
+                "Minimum Swapchain Image Count: {}",
+                surface_capabilities.min_image_count
+            );
 
             let (swapchain, swapchain_images) = Swapchain::new(
                 device.clone(),

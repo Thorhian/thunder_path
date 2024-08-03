@@ -25,7 +25,7 @@ use vulkano::{
     Validated, VulkanError,
 };
 use winit::{
-    event::{Event, WindowEvent},
+    event::{Event, WindowEvent, ElementState, VirtualKeyCode},
     event_loop::{ControlFlow, EventLoop},
     window::Window,
 };
@@ -59,24 +59,21 @@ pub fn run_gui_loop(
         nalgebra::Const<4>,
         nalgebra::ArrayStorage<f32, 4, 4>,
     > = nalgebra::Matrix4::new(
-        1.0, 0.0, 0.0, 0.0,
-        0.0, -1.0, 0.0, 0.0,
-        0.0, 0.0, -1.0, 0.0,
-        0.0, 0.0, 0.0, -1.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0,
+        0.0, -1.0,
     );
     //----------------------Camera Information-------------------------------//
-    
+
     let x_mid = bounds[0] + ((bounds[1] - bounds[0]) / 2.0);
     let y_mid = bounds[2] + ((bounds[3] - bounds[2]) / 2.0);
     let z_mid = bounds[4] + ((bounds[5] - bounds[4]) / 2.0);
-    let camera_focus = nalgebra::Point3::new(
-        x_mid, y_mid, z_mid
-    );
+    let camera_focus = nalgebra::Point3::new(x_mid, y_mid, z_mid);
+    let mut camera_location = nalgebra::Point3::new(10.0, 30.0, 100.0);
 
-    let _view = nalgebra::Matrix4::look_at_rh(
-        &nalgebra::Point3::new(10.0, 30.0, 100.0), 
-        &camera_focus, 
-        &nalgebra::Vector3::new(0.0, 1.0, 0.0)
+    let mut view = nalgebra::Matrix4::look_at_rh(
+        &camera_location,
+        &camera_focus,
+        &nalgebra::Vector3::new(0.0, 1.0, 0.0),
     );
 
     //----------------------Allocators--------------------------------------//
@@ -115,6 +112,37 @@ pub fn run_gui_loop(
                 ..
             } => {
                 recreate_swapchain = true;
+            }
+            Event::WindowEvent {
+                event: WindowEvent::KeyboardInput { input, .. },
+                ..
+            } => {
+                if input.state != ElementState::Pressed {
+                    return;
+                }
+
+                match input.virtual_keycode {
+                    Some(key) => {
+                        match key {
+                            VirtualKeyCode::H => camera_location.x -= 0.5,
+                            VirtualKeyCode::L => camera_location.x += 0.5,
+                            VirtualKeyCode::J => camera_location.y -= 0.5,
+                            VirtualKeyCode::K => camera_location.y += 0.5,
+                            _ => {}
+                        }
+                        let x = camera_location.x;
+                        let y = camera_location.y;
+                        let z = camera_location.z;
+                        println!("Camera Location: {x}, {y}, {z}");
+                        view = nalgebra::Matrix4::look_at_rh(
+                            &camera_location,
+                            &camera_focus,
+                            &nalgebra::Vector3::new(0.0, 1.0, 0.0),
+                        );
+                    }
+                    None => {}
+                }
+
             }
             Event::MainEventsCleared => {
                 let window = gui_resources
@@ -199,22 +227,18 @@ pub fn run_gui_loop(
                 let gui_layout = scene.pipelines[0].layout();
                 let model_vbo = scene.pipeline_dependencies[0].vbo.clone();
                 let desc_layout = gui_layout.set_layouts().get(0).unwrap();
-                
-                let view = nalgebra::Matrix4::new_translation(
-                    &nalgebra::Vector3::new(0.0, 0.0, 20.0),
-                );
-                
+
                 let aspect_ratio =
                     dimensions.width as f32 / dimensions.height as f32;
 
-                
+                let fov_deg : f32 = 45.0;
                 let perspective_mat = nalgebra::Matrix4::new_perspective(
                     aspect_ratio,
-                    3.14 / 3.0,
-                    -10.0,
-                    50.0,
+                    fov_deg.to_radians(),
+                    1.0,
+                    500.0,
                 );
-                
+
                 /*
                 let perspective_mat = crate::gpu::perspective_matrix(
                     aspect_ratio, 3.14 / 3.0, -10.0, 50.0
@@ -222,7 +246,7 @@ pub fn run_gui_loop(
 
                 let v_ubo_contents = shaders::gui_mesh_vert::MatrixUniforms {
                     model: nalgebra::Matrix4::identity(),
-                    view: view,
+                    view,
                     proj: perspective_mat * VULKAN_ADJUSTMENT,
                 };
 
