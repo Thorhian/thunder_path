@@ -15,10 +15,11 @@ opt-level = 3
 bytemuck = "1.12.3"
 clap = { version = "4.3.11", features = ["derive"] }
 image = "0.24.5"
-nalgebra = {version = "0.31.4", features = ["bytemuck"] }
+nalgebra = {version = "0.33.2", features = ["bytemuck"] }
+nalgebra-glm = {version = "0.19.0", features = ["convert-bytemuck"]}
 renderdoc = "0.10.1"
 russimp = "1.0.6"
-vulkano = "0.34.0"
+vulkano = "0.34.1"
 vulkano-shaders = "0.34.0"
 vulkano-win = "0.34.0"
 winit = "0.28.6"

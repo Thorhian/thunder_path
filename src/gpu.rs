@@ -163,13 +163,7 @@ impl GPUInstance {
         let instance =
             Instance::new(library.clone(), instance_create_info).unwrap();
 
-        // Setup debug callback if we are building in debug
-        let dbg_cb = if cfg!(debug_assertions) {
-            println!("Creating debugging callback...");
-            unsafe { Self::create_debug_callback(instance.clone()) }
-        } else {
-            None
-        };
+        let dbg_cb = None;
 
         // Build surface from a window if gui is enabled.
         let surface = if spawn_window {

@@ -1,6 +1,5 @@
 use nalgebra;
 use std::sync::Arc;
-use std::time::Instant;
 
 use vulkano::{
     buffer::{
@@ -25,7 +24,7 @@ use vulkano::{
     Validated, VulkanError,
 };
 use winit::{
-    event::{Event, WindowEvent, ElementState, VirtualKeyCode},
+    event::{ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::Window,
 };
@@ -52,16 +51,6 @@ pub fn run_gui_loop(
     let device = gpu_instance.device.clone();
     let graphics_queue = gpu_instance.queues[queue_index as usize].clone();
 
-    //----------------------Constants---------------------------------------//
-    const VULKAN_ADJUSTMENT: nalgebra::Matrix<
-        f32,
-        nalgebra::Const<4>,
-        nalgebra::Const<4>,
-        nalgebra::ArrayStorage<f32, 4, 4>,
-    > = nalgebra::Matrix4::new(
-        1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0,
-        0.0, -1.0,
-    );
     //----------------------Camera Information-------------------------------//
 
     let x_mid = bounds[0] + ((bounds[1] - bounds[0]) / 2.0);
@@ -124,16 +113,14 @@ pub fn run_gui_loop(
                 match input.virtual_keycode {
                     Some(key) => {
                         match key {
-                            VirtualKeyCode::H => camera_location.x -= 0.5,
-                            VirtualKeyCode::L => camera_location.x += 0.5,
-                            VirtualKeyCode::J => camera_location.y -= 0.5,
-                            VirtualKeyCode::K => camera_location.y += 0.5,
+                            VirtualKeyCode::H => camera_location.x -= 2.0,
+                            VirtualKeyCode::L => camera_location.x += 2.0,
+                            VirtualKeyCode::J => camera_location.y -= 2.0,
+                            VirtualKeyCode::K => camera_location.y += 2.0,
+                            VirtualKeyCode::U => camera_location.z += 2.0,
+                            VirtualKeyCode::D => camera_location.z -= 2.0,
                             _ => {}
                         }
-                        let x = camera_location.x;
-                        let y = camera_location.y;
-                        let z = camera_location.z;
-                        println!("Camera Location: {x}, {y}, {z}");
                         view = nalgebra::Matrix4::look_at_rh(
                             &camera_location,
                             &camera_focus,
@@ -142,7 +129,6 @@ pub fn run_gui_loop(
                     }
                     None => {}
                 }
-
             }
             Event::MainEventsCleared => {
                 let window = gui_resources
@@ -231,23 +217,18 @@ pub fn run_gui_loop(
                 let aspect_ratio =
                     dimensions.width as f32 / dimensions.height as f32;
 
-                let fov_deg : f32 = 45.0;
-                let perspective_mat = nalgebra::Matrix4::new_perspective(
+                let fov_deg: f32 = 45.0;
+                let perspective_mat = nalgebra_glm::perspective_rh_zo(
                     aspect_ratio,
                     fov_deg.to_radians(),
                     1.0,
                     500.0,
                 );
 
-                /*
-                let perspective_mat = crate::gpu::perspective_matrix(
-                    aspect_ratio, 3.14 / 3.0, -10.0, 50.0
-                );*/
-
                 let v_ubo_contents = shaders::gui_mesh_vert::MatrixUniforms {
                     model: nalgebra::Matrix4::identity(),
                     view,
-                    proj: perspective_mat * VULKAN_ADJUSTMENT,
+                    proj: perspective_mat,
                 };
 
                 let mvp_ubo = ubo_subbuffer_alloc.allocate_sized().unwrap();
@@ -277,11 +258,6 @@ pub fn run_gui_loop(
                         Default::default(),
                     )
                     .unwrap()
-                    /*.set_viewport(
-                        0,
-                        [gui_resources.viewport.clone()].into_iter().collect(),
-                    )
-                    .unwrap()*/
                     .bind_pipeline_graphics(scene.pipelines[0].clone())
                     .unwrap()
                     .bind_descriptor_sets(
